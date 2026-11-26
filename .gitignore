@@ -4,6 +4,7 @@
 !/.gitattributes
 !/LICENSE
 !/README.md
+!/PRIVACY.md
 !/CHANGELOG.md
 !/package.json
 !/package-lock.json
