@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>剪藏预览 · 页笺</title>
+  <link rel="icon" href="icons/32.png">
+  <link rel="stylesheet" href="popup.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body>
+  <header class="binding">
+    <span class="brand"><img src="icons/48.png" alt="" width="28" height="28">页笺</span>
+    <h1>剪藏预览</h1>
+  </header>
+
+  <main id="preview" hidden>
+    <p id="kind" class="kind"></p>
+    <h2 id="title" dir="auto"></h2>
+    <dl class="facts source">
+      <div><dt id="byline-label">作者</dt><dd id="author" dir="auto"></dd></div>
+      <div><dt>来源地址</dt><dd id="source" dir="ltr"></dd></div>
+    </dl>
+
+    <section class="sample">
+      <h3 id="excerpt-label">正文预览</h3>
+      <p id="excerpt" dir="auto"></p>
+      <dl class="facts contents">
+        <div id="images-row"><dt>图片</dt><dd id="images"></dd></div>
+        <div id="cover-row" hidden><dt>封面</dt><dd id="cover"></dd></div>
+        <div id="captions-row" hidden><dt>字幕</dt><dd id="captions"></dd></div>
+        <div><dt>中文摘要</dt><dd id="summary"></dd></div>
+      </dl>
+    </section>
+
+    <div class="destination">
+      <h3>预计保存位置</h3>
+      <p id="destination" dir="auto"></p>
+    </div>
+  </main>
+
+  <footer>
+    <p id="status" role="status">正在读取当前网页…</p>
+    <div class="actions">
+      <button type="button" id="settings" class="settings">去设置</button>
+      <button type="button" id="cancel">取消</button>
+      <button type="button" id="confirm" class="primary" disabled>确认保存</button>
+    </div>
+  </footer>
+</body>
+</html>

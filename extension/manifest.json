@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "页笺 · 本地 Markdown 剪藏",
+  "version": "1.1.1",
+  "description": "先预览文章、选段或 YouTube 视频，确认后再将笔记、配图、字幕与中文摘要归档到本地。",
+  "minimum_chrome_version": "122",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {"default_title": "页笺：预览剪藏", "default_popup": "popup.html"},
+  "icons": {"16":"icons/16.png", "32":"icons/32.png", "48":"icons/48.png", "128":"icons/128.png"},
+  "background": {"service_worker":"background.js", "type":"module"},
+  "options_ui": {"page":"settings.html", "open_in_tab":true},
+  "commands": {"_execute_action": {"description":"剪藏当前页面或选区"}},
+  "content_security_policy": {"extension_pages":"script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}
+}

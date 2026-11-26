@@ -1,0 +1,8 @@
+{
+  "name": "pageleaf-local-clipper",
+  "version": "1.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test tests/*.test.*" },
+  "devDependencies": { "playwright": "1.56.1" }
+}

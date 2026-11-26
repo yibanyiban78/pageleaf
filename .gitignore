@@ -1,0 +1,32 @@
+# Public repository: review new top-level paths before explicitly admitting them.
+/*
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/README.md
+!/package.json
+!/package-lock.json
+!/extension/
+!/tools/
+/tools/*
+!/tools/package_store.py
+!/tools/check-loaded.mjs
+!/tests/
+/tests/*
+!/tests/*.mjs
+!/tests/browser-fixtures/
+
+# Never include local state, credentials, evidence or release artifacts.
+node_modules/
+.agent-work/
+.test-browsers/
+.test-tmp/
+release/
+evidence/
+__pycache__/
+.env
+.env.*
+*.pem
+*.key
+*.crx
+*.pfx

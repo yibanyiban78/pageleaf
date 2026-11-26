@@ -1,0 +1,98 @@
+:root {
+  color-scheme: light;
+  --ink: #193f4b;
+  --muted: #465f65;
+  --teal: #245866;
+  --paper: #fff;
+  --wash: #eef4f3;
+  --binding: #e2edeb;
+  --line: #c4d1d0;
+  --ribbon: #a6532e;
+  --focus: #a64416;
+  --alert: #8a3b21;
+  --serif: 'Noto Serif CJK SC', 'Songti SC', SimSun, serif;
+  font-family: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+h1, h2, h3, p, dl, dd { margin: 0; }
+body {
+  inline-size: 26rem;
+  max-inline-size: 100%;
+  max-block-size: 580px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: .875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* Let Chrome first measure intrinsic content in its tiny initial action popup.
+   Once sized, respect the available desktop height (often less than 580px). */
+@media (min-height: 180px) {
+  body { max-block-size: min(580px, 100dvh); }
+}
+.binding {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: .7rem 2.5rem .7rem 1.15rem;
+  background: var(--binding);
+  border-bottom: 1px solid var(--line);
+}
+.binding::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 1.25rem;
+  width: .72rem;
+  height: 1.9rem;
+  background: var(--ribbon);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%);
+}
+.brand { display: flex; align-items: center; gap: .45rem; font-weight: 650; }
+.binding h1 { font-size: .875rem; color: var(--muted); font-weight: 500; padding-inline-start: .8rem; border-inline-start: 1px solid #9cb4b2; }
+main { min-block-size: 0; overflow-y: auto; padding: 1rem 1.25rem; }
+main:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
+.kind { color: var(--teal); font-weight: 650; font-size: .78rem; }
+h2 { margin-top: .15rem; font: 700 1.45rem/1.35 var(--serif); }
+.facts { display: grid; gap: .24rem; }
+.facts > div { display: grid; grid-template-columns: 4em minmax(0, 1fr); gap: .65rem; }
+dt { color: var(--muted); }
+.source, .contents { font-size: .8125rem; margin-top: .65rem; }
+#source { text-align: start; }
+.sample { margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--line); }
+h3 { font-size: .8125rem; font-weight: 650; }
+#excerpt { margin-top: .2rem; line-height: 1.65; }
+.destination { margin-top: .9rem; padding: .5rem .75rem; background: var(--wash); border-inline-start: 3px solid #598989; }
+.destination h3 { color: var(--muted); font-weight: 500; font-size: .78rem; }
+#destination { margin-top: .12rem; font-weight: 600; }
+footer { flex: none; border-top: 1px solid var(--line); padding: .65rem 1.25rem .85rem; }
+@media (max-height: 179px) {
+  footer { position: sticky; inset-block-end: 0; background: var(--paper); }
+}
+#status { color: var(--muted); font-size: .8125rem; }
+#status[data-tone="error"] { color: var(--alert); }
+.actions { display: flex; justify-content: flex-end; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .45rem; }
+button {
+  min-block-size: 2.75rem;
+  padding: .45rem .95rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--teal);
+  background: var(--paper);
+  border: 1px solid #769291;
+  border-radius: 4px;
+}
+button:hover:enabled { background: var(--wash); }
+button.primary { color: var(--paper); border-color: var(--teal); background: var(--teal); }
+button.primary:hover:enabled { background: var(--ink); }
+button:active:enabled { box-shadow: inset 0 0 0 2px currentColor; }
+button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+button:disabled { color: var(--muted); background: var(--wash); border-color: var(--line); cursor: default; }
+button.settings { margin-inline-end: auto; padding-inline: .35rem; border-color: transparent; text-decoration: underline; text-underline-offset: .2em; }

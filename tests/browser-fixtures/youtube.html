@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>山溪观测 - YouTube</title><meta property="og:title" content="山溪观测"></head>
+<body><main><div id="movie_player"></div><h1>山溪观测</h1><div id="description"><p id="excerpt">视频选区标记：沿山溪行走，逐段记录。<img alt="选段草图" width="140" height="100" src="/media/map.png"></p></div></main>
+<script>
+const videoId = new URL(location.href).searchParams.get('v');
+const noCaptions = videoId === 'NoTrack0001';
+const channelId = 'UC' + 'a'.repeat(22);
+const data = {
+  playabilityStatus: {status:'OK'},
+  videoDetails: {videoId, author:'水文工作室', channelId, title:noCaptions ? '山溪无字幕记录' : '山溪观测', shortDescription:'视频简介标记：雨后山溪，流速与岸线变化。', thumbnail:{thumbnails:[{url:'https://i.ytimg.com/vi/'+videoId+'/cover.png',width:640,height:360}]}},
+  microformat:{playerMicroformatRenderer:{ownerChannelName:'水文工作室',externalChannelId:channelId,ownerProfileUrl:'https://www.youtube.com/channel/'+channelId}},
+  ...(noCaptions ? {} : {captions:{playerCaptionsTracklistRenderer:{captionTracks:[{baseUrl:new URL('/api/timedtext?v='+videoId+'&lang=zh-Hans',location.origin).href, vssId:'.zh-Hans',name:{simpleText:'中文（简体）'},languageCode:'zh-Hans'}]}}})
+};
+window.ytInitialPlayerResponse = data;
+const player = document.getElementById('movie_player');
+player.getPlayerResponse = () => data;
+player.getVideoData = () => ({video_id:videoId, title:data.videoDetails.title, author:data.videoDetails.author});
+</script></body></html>
