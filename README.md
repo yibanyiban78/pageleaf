@@ -75,3 +75,7 @@
 ## 开发与验证
 
 源码用户可在桌面 Chrome 的开发者模式直接加载 `extension/`，不需构建。安装 Node 24+ 后运行 `npm ci`、`npm test`；使用兼容的桌面 Chrome 运行 `node tests/browser.mjs` 做独立浏览器集成检查。商店候选包使用 `python tools/package_store.py` 构建，根目录直接包含 `manifest.json`，仅包含允许发布的运行文件。测试、剪藏数据、密钥和提交材料均不打进扩展 ZIP。重复构建相同版本应产生相同哈希，不覆盖不同内容的同名包。普通使用者无须执行这些命令。
+
+Windows 桌面可在构建候选 ZIP 后运行 `node tests/store-profiles.mjs`：使用两个新建的临时 Chrome 个人资料、两个测试目录与模拟服务，验证配置、笔记和索引独立。测试输出只保存在本地，不提交 Git。
+
+版本变化见 [CHANGELOG](CHANGELOG.md)，源码采用 [MIT 许可证](LICENSE)。维护时在分支上开发，合并前运行模块和浏览器检查；修改发布内容须同步扩展版本、项目版本和锁文件。`vX.Y.Z-rc.N` 是待核验的候选标签，不表示商店已上架；商店实际发布后再标正式版，不重写已有标签。
