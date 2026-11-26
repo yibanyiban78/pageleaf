@@ -22,7 +22,8 @@ test('literal Markdown cover and article image destinations decode offline after
   const origin = 'https://fixture.invalid';
   await source.route('**/*', r => {
     if (r.request().url() === `${origin}/`) return r.fulfill({contentType: 'text/html', body: '<!doctype html><title>Test</title>'});
-    if (r.request().url() === `${origin}/archive.js`) return r.fulfill({contentType: 'text/javascript', path: fileURLToPath(new URL('../extension/archive.js', import.meta.url))});
+    const name=['archive.js','dedup.js','markdown.js'].find(n=>r.request().url()===`${origin}/${n}`);
+    if(name) return r.fulfill({contentType:'text/javascript',path:fileURLToPath(new URL(`../extension/${name}`,import.meta.url))});
     return r.abort();
   });
   const writer = await source.newPage(); await writer.goto(origin);
@@ -30,7 +31,7 @@ test('literal Markdown cover and article image destinations decode offline after
     const {saveClip} = await import('/archive.js'), root = await navigator.storage.getDirectory();
     const title = '[讲解] 100% #编程 (上) 🎬 '.repeat(8), author = '频道 (甲)';
     const token = `PAGELEAFIMG${'ab'.repeat(16)}X1END`, url = 'https://images.invalid/fixture';
-    const clips = [{kind: 'youtube', title, author, cover: url}, {kind: 'article', title, author, body: token, images: [{token, url, alt: '文章图'}]}];
+    const clips = [{kind:'youtube', videoId:'Fixture0001',url:'https://www.youtube.com/watch?v=Fixture0001',title, author, cover: url}, {kind:'article',url:'https://fixture.invalid/entry',title, author, body: token, images: [{token, url, alt: '文章图'}]}];
     const notes = [], files = [];
     for (const clip of clips) {
       const isCover = clip.kind === 'youtube', canvas = document.createElement('canvas');

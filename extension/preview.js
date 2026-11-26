@@ -1,8 +1,10 @@
 import {getRootState, getServiceInfo} from './store.js';
 import {estimatedRelativePath} from './archive.js';
+import {clipKey} from './dedup.js';
+import {resolveCapture,canConfirm} from './capture-state.js';
 
 export function samePage(left, right) {
-  try { const a=new URL(left), b=new URL(right); a.hash=b.hash=''; return /^https?:$/.test(a.protocol) && a.href===b.href; }
+  try { const a=new URL(left), b=new URL(right); return /^https?:$/.test(a.protocol) && a.href===b.href; }
   catch { return false; }
 }
 export function videoId(input) {
@@ -26,6 +28,14 @@ const issued=new WeakSet();
 export async function preparePreview() {
   const at=Date.now();
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+  try { return await previewTab(tab,at); }
+  catch(error) {
+    const message=error?.message || '无法读取这个页面，请重新打开预览。';
+    if(tab?.id) await chrome.runtime.sendMessage({type:'pageleaf.previewProblem',tabId:tab.id,url:tab.url||''}).catch(()=>{});
+    throw Object.assign(new Error(message),{captureStatus:{state:'error',retryable:false,message}});
+  }
+}
+async function previewTab(tab,at) {
   if(!tab?.id || !/^https?:\/\//i.test(tab.url||'')) throw new Error('这个页面不支持剪藏。请在文章或 YouTube 视频页点页笺。');
   const target={tabId:tab.id};
   let page;
@@ -49,7 +59,29 @@ export async function preparePreview() {
     aiReady:!aiHold,aiHold,service:serviceIdentity(config),excerpt:clip.excerpt||clip.description||'',
     estimatedPath:`${folderName?folderName+'/':''}${estimatedRelativePath(clip,new Date(at))}`,
     captionStatus:clip.kind==='youtube'?(clip.cues?.length?'read':clip.captionStatus==='unavailable'?'unavailable':'pending'):''};
-  issued.add(draft); return draft;
+  draft.key=await clipKey(clip);
+  issued.add(draft);
+  await refreshCaptureStatus(draft);
+  return draft;
+}
+
+// No recapture or writes to the user's folder. A displayed selection stays the
+// original immutable snapshot, even if the source highlight later changes.
+export async function refreshCaptureStatus(draft) {
+  const {root,revision}=await getRootState();
+  const tab=await chrome.tabs.get(draft.tabId).catch(()=>null);
+  let state;
+  if (!tab || !samePage(draft.sourceUrl,tab.url)) state={state:'error',message:'原网页已切换，请关闭并重新预览。'};
+  else if (revision!==draft.rootRevision) state={state:'error',message:'保存目录已改变，请关闭并重新预览。'};
+  else if (!root) state={state:'error',message:'尚未选择保存文件夹。请先到设置选择目录。'};
+  else if (!await canWrite(root)) state={state:'error',message:'文件夹需要重新授权；无法核实保存状态。'};
+  else state=await resolveCapture(root,draft.clip,draft.key,revision);
+  draft.captureStatus=state;
+  // Changes to optional toolbar decoration must never block archiving.
+  if(tab && samePage(draft.sourceUrl,tab.url) && revision===draft.rootRevision){
+    await chrome.runtime.sendMessage({type:'pageleaf.previewState',tabId:draft.tabId,documentId:draft.documentId,url:draft.sourceUrl,key:draft.key,rootRevision:revision,state:state.state}).catch(()=>{});
+  }
+  return state;
 }
 
 // This is called ONLY from the popup's confirm button. No close/visibility handler submits.
@@ -57,9 +89,14 @@ export async function confirmPreview(draft) {
   if(!issued.has(draft) || !draft.folderReady) throw new Error('无法保存这个预览。请重新打开预览并检查目录权限。');
   if(Date.now()-draft.at>15*60_000) throw new Error('预览已过期，请关闭弹窗后重新预览。');
   issued.delete(draft); // At most one submission, even if two clicks arrive before the first await.
-  const {tabId,windowId,documentId,sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus}=draft;
+  const state=await refreshCaptureStatus(draft);
+  if(!canConfirm(state)){
+    const error=new Error(state.message || (state.path ? '已保存，无需重复剪藏。' : '当前不能保存，请重新预览。'));
+    error.captureStatus=state;throw error;
+  }
+  const {tabId,windowId,documentId,sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus,key}=draft;
   let response;
-  try { response=await chrome.runtime.sendMessage({type:'pageleaf.confirm',task:{source:tabId,windowId,documentId,url:sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus}}); }
+  try { response=await chrome.runtime.sendMessage({type:'pageleaf.confirm',task:{source:tabId,windowId,documentId,url:sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus,key}}); }
   catch { throw new Error('任务未能交接，请查看图标状态后重新预览。'); }
   if(!response?.ok) throw new Error(response?.message || '未能开始保存，请关闭后重新预览。');
 }

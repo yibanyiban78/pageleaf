@@ -1,4 +1,4 @@
-"""Build a Chrome Web Store upload ZIP, distinct from the historical unpack-and-load kits."""
+"""Build the reproducible GitHub Release ZIP (manifest at its root for manual loading)."""
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -11,7 +11,7 @@ EXTENSION = ROOT / 'extension'
 # rather than something to ship because its extension happens to be .json or .js.
 FILES = frozenset('''manifest.json archive.js background.js extract.js job.html job.js
 network.js popup.css popup.html popup.js preview.js settings.html settings.js
-store.js vault.js style.css video-preview.js video.js icons/16.png icons/32.png
+capture-state.js dedup.js indicator.js markdown.js store.js vault.js style.css video-preview.js video.js icons/16.png icons/32.png
 icons/48.png icons/128.png'''.split())
 
 
@@ -46,7 +46,7 @@ def build():
     with ZipFile(BytesIO(payload)) as archive:
         if archive.namelist() != list(entries) or archive.testzip() or any(archive.read(n) != b for n, b in entries.items()):
             raise ValueError('ZIP contents failed readback')
-    dest = ROOT / 'release' / f'pageleaf-cws-{version}.zip'
+    dest = ROOT / 'release' / f'pageleaf-{version}.zip'
     dest.parent.mkdir(exist_ok=True)
     try:
         with dest.open('xb') as f:

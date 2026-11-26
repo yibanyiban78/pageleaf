@@ -1,8 +1,6 @@
 // The only module that writes into the user's chosen directory. No network access here.
-const INDEX = '剪藏索引.md';
-const BEGIN = '<!-- pageleaf:index:v1 -->';
-const END = '<!-- /pageleaf:index:v1 -->';
-const KINDS = new Map([['article', '文章'], ['selection', '摘录'], ['youtube', 'YouTube 视频']]);
+import {text, line, plain, urlOf, relative, link, bodyMarkdown} from './markdown.js';
+import {INDEX, BEGIN, END, KINDS, RECEIPTS, FORMAT, HEADER_BYTES, clipKey, lookupClip, indexEntries, receiptPath, warningCodes} from './dedup.js';
 const TOKEN = /^PAGELEAFIMG[a-f\d]{32}X\d+END$/;
 const encoder = new TextEncoder();
 let queue = Promise.resolve();
@@ -15,35 +13,6 @@ function locked(work) {
   queue = next.catch(() => {});
   return next;
 }
-
-function text(v) {
-  return typeof v === 'string' ? v.replace(/\r\n?/g, '\n')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, '')
-    .replace(/[\u2028\u2029]/g, '\n')
-    .replace(/\bdata:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*,[^\s<>"')\]]*/gi, '［内嵌图片］').toWellFormed() : '';
-}
-const line = v => text(v).replace(/\s+/g, ' ').trim();
-const htmlEscape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-// & / angle brackets are escaped, not removed: literal HTML stays readable.
-// A backslash in untrusted input cannot escape our generated Markdown delimiters.
-const plain = v => htmlEscape(text(v)).replace(/[\\`*_{}\[\]#!|~^$%=+\-]/g, '\\$&')
-  .replace(/^(\s*\d+)([.)])/gm, '$1\\$2');
-// Undo precisely the extractor's single layer of text entities before re-escaping.
-const decoded = s => s.replace(/&(amp|lt|gt);/g, (_, key) => ({amp: '&', lt: '<', gt: '>'})[key]);
-
-function urlOf(v) {
-  if (typeof v !== 'string' || !/^https?:\/\//i.test(v) || /[\s\x00-\x1f\x7f\\]/u.test(v)) return null;
-  try {
-    const url = new URL(v);
-    return url.hostname && !url.username && !url.password ? url : null;
-  } catch { return null; }
-}
-const hex = c => '%' + c.charCodeAt(0).toString(16).toUpperCase();
-// Encode segment-by-segment, including Markdown punctuation left raw by encodeURIComponent.
-const relative = path => path.split('/').map(s => encodeURIComponent(s).replace(/[!'()*]/g, hex)).join('/');
-const remote = url => url.origin + url.href.slice(url.origin.length).replace(/[()<>"'`\[\]\\]/g, hex)
-  .replace(/&(?=(?:#\w+|[a-z]\w*);)/ig, '&amp;'); // keep IPv6 brackets in the authority
-const link = (caption, url) => url ? `[${plain(caption)}](${remote(url)})` : plain(caption);
 
 function truncate(s, bytes) {
   let used = 0, out = '';
@@ -120,76 +89,16 @@ async function raster({blob, ext} = {}) {
   return {blob, ext: format};
 }
 
-// Recognize the extractor's small Markdown vocabulary. Only code we generate can
-// emit a link destination or image. Escaped text, raw HTML, references, autolinks
-// and wiki/transclusion syntax never bypass this boundary.
-function inline(s, images) {
-  const atoms = /\\[!-\/:-@\[-`{-~]|PAGELEAFIMG[a-f\d]{32}X\d+END|\[((?:\\.|[^\[\]\\\n])*)\]\((https?:\/\/[^\s<>()\\]+)\)|`+/g;
-  // Dynamic backtick spans can contain shorter runs. Index closing runs once
-  // instead of repeatedly searching the rest of the line for an equal-length run.
-  const next = new Map(), last = new Map();
-  for (const run of s.matchAll(/`+/g)) {
-    if (last.has(run[0].length)) next.set(last.get(run[0].length), run.index);
-    last.set(run[0].length, run.index);
-  }
-  const literal = str => plain(decoded(str.replace(/PAGELEAFIM&#71;/g, 'PAGELEAFIMG'))).replace(/\\\*/g, '*'); // retain extractor's emphasis
-  let result = '', start = 0, match;
-  while ((match = atoms.exec(s))) {
-    result += literal(s.slice(start, match.index));
-    const [atom, label, href] = match;
-    if (atom[0] === '\\') result += plain(atom.slice(1));
-    else if (atom[0] === '`' && next.has(match.index)) {
-      const end = next.get(match.index) + atom.length;
-      const span = s.slice(match.index, end);
-      result += /^`+\s*\$?=/.test(span) ? plain(span) : span;
-      atoms.lastIndex = end;
-    } else if (href) {
-      const hasImage = [...label.matchAll(/PAGELEAFIMG[a-f\d]{32}X\d+END/g)].some(m => images.has(m[0]));
-      const target = urlOf(decoded(href)), caption = inline(label, images);
-      result += hasImage || !target ? caption : `[${caption}](${remote(target)})`;
-    } else result += images.get(atom) ?? plain(atom);
-    start = atoms.lastIndex;
-  }
-  return result + literal(s.slice(start));
-}
-function bodyMarkdown(source, images) {
-  const lines = text(source).split('\n'), out = [];
-  let fence = null, code = [];
-  function emitCode() {
-    // Fixed-format, no source-provided info string (e.g. a Markdown plugin's language).
-    let size = 3;
-    for (const row of code) for (const m of row.matchAll(/`+/g)) size = Math.max(size, m[0].length + 1);
-    const delim = '`'.repeat(size);
-    out.push(delim, code.join('\n'), delim); fence = null; code = [];
-  }
-  for (const row of lines) {
-    const delim = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(row);
-    if (fence) {
-      if (delim && delim[1][0] === fence[0] && delim[1].length >= fence.length && !delim[2].trim()) emitCode();
-      else code.push(row);
-      continue;
-    }
-    // An inline span may begin a line with 3+ backticks. A backtick in
-    // the putative info string disqualifies it as a CommonMark opening fence.
-    if (delim && (delim[1][0] !== '`' || !delim[2].includes('`'))) { fence = delim[1]; continue; }
-    // Prefixes are reconstructed from a fixed grammar rather than trusting a line.
-    const match = /^((?: {0,3}>[ \t]?)*)( *)(#{1,6}[ \t]+|[-+*][ \t]+|\d{1,9}[.)][ \t]+)?(.*)$/.exec(row);
-    const [, quotes, indent, prefix = '', rest] = match;
-    out.push(quotes + indent + prefix + (rest === '---' && !prefix ? '---' : inline(rest, images)));
-  }
-  if (fence) emitCode();
-  return out.join('\n').trim();
-}
-
 function timestamp(seconds) {
   const m = Math.floor(seconds / 60), s = String(seconds % 60).padStart(2, '0');
   return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${s}` : `${String(m).padStart(2, '0')}:${s}`;
 }
-function renderNote(clip, {title, author, day, images, cover}) {
+function renderNote(clip, {title, author, day, images, cover, marker}) {
   const video = clip.kind === 'youtube', source = urlOf(clip.url);
   const rows = [`# ${plain(title)}`, '', `- 类型：${KINDS.get(clip.kind)}`, `- 剪藏日期：${day}`,
     `- ${video ? '频道' : '作者'}：${link(author, urlOf(clip.authorUrl))}`,
-    `- 来源：${source ? link(source.href, source) : '未提供有效链接'}`];
+    `- 来源：${source ? link(source.href, source) : '未提供有效链接'}`, marker];
+  if (encoder.encode(rows.join('\n') + '\n\n').length > HEADER_BYTES) throw new Error('来源或标题过长，无法建立可核实的剪藏记录。');
   const section = (name, content) => rows.push('', '## ' + name, '', content);
   if (cover) rows.push('', cover);
   const cues = video && Array.isArray(clip.cues) ? clip.cues.filter(c => c && typeof c.start === 'number' && c.start >= 0 && Number.isSafeInteger(Math.floor(c.start)) && line(c.text)) : [];
@@ -281,8 +190,6 @@ async function imagesFor(clip, dateDir, stem, getImage, report, warnings) {
 // This is an insert-only edit, not a re-render of the user's index. Preserve
 // leading BOM, CRLF, custom paragraphs and user edits even inside our region.
 function insertEntry(old, day, path, entry) {
-  const dest = relative(path);
-  if ([dest, path].some(h => old.includes(`](${h})`) || old.includes(`](<${h}>)`))) return old;
   const nl = old.includes('\r\n') ? '\r\n' : '\n';
   const starts = [...old.matchAll(/^<!-- pageleaf:index:v1 -->\r?$/gm)];
   const ends = [...old.matchAll(/^<!-- \/pageleaf:index:v1 -->\r?$/gm)];
@@ -304,13 +211,14 @@ function insertEntry(old, day, path, entry) {
   }
   return old.slice(0, end) + `## ${day}${nl}${nl}${entry}${nl}${nl}` + old.slice(end);
 }
-async function addToIndex(root, day, path, title, author, kind) {
+async function addToIndex(root, day, path, title, author, kind, key) {
   const handle = await root.getFileHandle(INDEX, {create: true});
   const existing = await handle.getFile();
   if (existing.size > 32 * 1024 * 1024) throw new Error('索引过大');
   const old = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(await existing.arrayBuffer());
   if (old.includes('\u0000')) throw new Error('索引不是 UTF-8 Markdown 文本');
-  const entry = `- [${plain(title)}](${relative(path)}) · ${plain(author)} · ${KINDS.get(kind)}`;
+  if (indexEntries(old).some(e => e.path === path && e.kind === KINDS.get(kind) && (!e.key || e.key === key))) return;
+  const entry = `- [${plain(title)}](${relative(path)}) · ${plain(author)} · ${KINDS.get(kind)} <!-- pageleaf:key:${key} -->`;
   const result = insertEntry(old, day, path, entry);
   if (result === old) return;
   const stream = await handle.createWritable({mode: 'exclusive'});
@@ -322,13 +230,50 @@ async function addToIndex(root, day, path, title, author, kind) {
   } catch (error) { try { await stream.abort(); } catch {} throw error; }
 }
 
-/** Save a clip; only a note-write failure rejects. Image/index failures are warnings. */
-export async function saveClip(root, clip, {date = new Date(), getImage, onProgress} = {}) {
+// Establish the locator BEFORE committing Markdown. A crash after the note but
+// before the index cannot make it look new. A locator alone never proves a save.
+async function remember(root, key, path) {
+  try {
+    const record = {format:FORMAT, key, path};
+    receiptPath(record, key);
+    const dir = await root.getDirectoryHandle(RECEIPTS, {create:true});
+    const name = key + '.json';
+    let handle;
+    try { handle = await dir.getFileHandle(name); } catch (e) { if (e.name !== 'NotFoundError') throw e; }
+    if (!handle) {
+      const created = await dir.getFileHandle(name, {create:true});
+      try { return await writeFile(created, JSON.stringify(record)); }
+      catch (e) {
+        // A failed first write may create an empty placeholder. Remove only OUR
+        // still-empty, same entry while the archive lock is held to allow retry.
+        try {
+          const current = await dir.getFileHandle(name);
+          if (await created.isSameEntry(current) && !(await current.getFile()).size) await dir.removeEntry(name);
+        } catch { /* Cannot prove ownership / permissions changed: leave it alone. */ }
+        throw e;
+      }
+    }
+    const stream = await handle.createWritable({mode:'exclusive'});
+    try {
+      const current = await handle.getFile();
+      if (current.size > 4096) throw new Error();
+      // Only replace a known receipt (deleted note / failed earlier write), never
+      // somebody's unrelated file that happens to have the generated name.
+      receiptPath(JSON.parse(await current.text()), key);
+      await stream.write(JSON.stringify(record)); await stream.close();
+    } catch (e) { try { await stream.abort(); } catch {} throw e; }
+  } catch { throw new Error('无法建立页笺本地保存记录，未写入笔记。请检查目录权限和剩余空间。'); }
+}
+/** Save once per identity in this vault. A committed note survives index failures. */
+export async function saveClip(root, clip, {date = new Date(), getImage, onProgress, warningsBeforeSave = []} = {}) {
   if (!KINDS.has(clip?.kind)) throw new TypeError('未知的剪藏类型');
   const day = localDay(date), title = line(clip.title) || '无标题', author = line(clip.author) || (clip.kind === 'youtube' ? '未知频道' : '未知作者');
   const report = message => { try { onProgress?.(message); } catch {} };
   return locked(async () => {
-    const warnings = [];
+    const key = await clipKey(clip), previous = await lookupClip(root, clip, key);
+    if (previous.state !== 'new') return {path:previous.path, indexed:previous.indexed,
+      warnings:previous.state === 'partial' ? [previous.message] : [], duplicate:true};
+    const warnings = warningsBeforeSave.filter(s => typeof s === 'string' && s.trim());
     const dateDir = await root.getDirectoryHandle(day, {create: true});
     const base = stemFor(clip.kind, title, author);
     let name = await unused(dateDir, base, '.md');
@@ -336,13 +281,14 @@ export async function saveClip(root, clip, {date = new Date(), getImage, onProgr
     report('正在写入笔记…');
     // An external program might have created the note during the downloads.
     if (await occupied(dateDir, name)) name = await unused(dateDir, base, '.md');
-    const note = renderNote(clip, {title, author, day, ...media});
+    const path = day + '/' + name;
+    const note = renderNote(clip, {title, author, day, ...media, marker:`<!-- pageleaf:clip:v1 ${key} ${warningCodes(warnings)} -->`});
+    await remember(root, key, path);
     const handle = await dateDir.getFileHandle(name, {create: true});
     await writeFile(handle, note);
-    const path = day + '/' + name;
     report('正在更新剪藏索引…');
     try {
-      await addToIndex(root, day, path, title, author, clip.kind);
+      await addToIndex(root, day, path, title, author, clip.kind, key);
       return {path, indexed: true, warnings};
     } catch {
       warnings.push('笔记已保存，但剪藏索引未更新。请检查索引文件是否为可写的 UTF-8 文本，以及自动索引标记是否完整。');

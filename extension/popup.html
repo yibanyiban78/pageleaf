@@ -12,11 +12,13 @@
   <header class="binding">
     <span class="brand"><img src="icons/48.png" alt="" width="28" height="28">页笺</span>
     <h1>剪藏预览</h1>
+    <span id="capture-state" data-state="checking">正在核对</span>
   </header>
 
   <main id="preview" hidden>
     <p id="kind" class="kind"></p>
     <h2 id="title" dir="auto"></h2>
+    <button type="button" id="title-toggle" aria-controls="title" aria-expanded="false" hidden>展开完整标题</button>
     <dl class="facts source">
       <div><dt id="byline-label">作者</dt><dd id="author" dir="auto"></dd></div>
       <div><dt>来源地址</dt><dd id="source" dir="ltr"></dd></div>
@@ -34,13 +36,15 @@
     </section>
 
     <div class="destination">
-      <h3>预计保存位置</h3>
+      <h3 id="destination-label">预计保存位置</h3>
       <p id="destination" dir="auto"></p>
+      <p id="saved-date" hidden>首次剪藏：<time id="saved-at"></time></p>
+      <p id="capture-detail" hidden></p>
     </div>
   </main>
 
   <footer>
-    <p id="status" role="status">正在读取当前网页…</p>
+    <p id="status" role="status" aria-atomic="true">正在读取当前网页…</p>
     <div class="actions">
       <button type="button" id="settings" class="settings">去设置</button>
       <button type="button" id="cancel">取消</button>

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { saveClip } from '../extension/archive.js';
+import { clipKey, lookupClip } from '../extension/dedup.js';
 
 const DAY = '2026-02-03';
 const DATE = new Date(2026, 1, 3, 0, 1);
@@ -8,13 +9,14 @@ const INDEX = '剪藏索引.md';
 const tkn = n => `PAGELEAFIMG${'ab'.repeat(16)}X${n}END`;
 const PNG = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGo8AAAAASUVORK5CYII=', 'base64'));
 const picture = async () => ({blob: new Blob([PNG], {type: 'image/png'}), ext: 'png'});
-const clip = (props = {}) => ({kind: 'article', title: '山海之间', url: 'https://example.org/p/1', author: '阿岚', body: '正文原文。', images: [], ...props});
+const clip = (props = {}) => ({kind: 'article', title: '山海之间', url: props.kind === 'youtube' ? 'https://youtu.be/abcdefgh123' : 'https://example.org/p/1', author: '阿岚', body: '正文原文。', images: [], ...props});
 const save = (root, props = {}, options = {}) => saveClip(root, clip(props), {date: DATE, ...options});
 
 // Case-insensitive, type-aware FS with commit-on-close and controllable I/O
 // failures. No tests access the user's filesystem, network or local timezone settings.
 class Dir {
   constructor(path = '', state = {rev: 0, events: []}) { this.kind = 'directory'; this.path = path; this.state = state; this.items = new Map(); }
+  async removeEntry(name) { this.items.delete(name.toLowerCase()); }
   async getDirectoryHandle(name, options) { return this.get('directory', name, options); }
   async getFileHandle(name, options) { return this.get('file', name, options); }
   get(kind, name, {create = false} = {}) {
@@ -35,6 +37,7 @@ class Dir {
 }
 class MemFile {
   constructor(path, state) { this.kind = 'file'; this.path = path; this.state = state; this.data = new Blob(); this.rev = 0; }
+  async isSameEntry(other) { return this === other; }
   async getFile() { return new File([this.data], this.path, {lastModified: this.rev}); }
   async createWritable() {
     let data;
@@ -152,7 +155,7 @@ test('HTTP media in an article, selection or cover is a plain link, even on the 
   const url = 'http://x.example/figure.png?asset=sample&n=2';
   for (const kind of ['article', 'selection', 'youtube']) {
     const root=new Dir(), called=[];
-    const r=await save(root,{kind,url:'http://x.example/page',body:tkn(0),images:[{token:tkn(0),url,alt:'图'}],cover:url},{getImage:async u=>{called.push(u);return picture();}});
+    const r=await save(root,{kind,url:kind === 'youtube' ? 'https://youtu.be/abcdefgh123' : 'http://x.example/page',body:tkn(0),images:[{token:tkn(0),url,alt:'图'}],cover:url},{getImage:async u=>{called.push(u);return picture();}});
     const note=await root.text(r.path);
     assert.deepEqual(called,[]);assert(r.indexed);assert.deepEqual(r.warnings,[]);
     assert(note.includes(`](${url})（HTTP 原图链接，未下载）`));assert(!note.includes('!['));assert(!root.at(`${DAY}/assets`));
@@ -186,7 +189,7 @@ test('untrusted text cannot insert raw HTML, remote embeds, active URLs or index
 test('local dates, safe Windows filenames and conservative UTF-8 filename lengths', async () => {
   const root = new Dir();
   for (const title of ['con', 'CON.txt', 'NUL... ', 'Com¹.txt', 'lpt9', '../a:b /c\\|*?"<d>', ' . ', '花🌷'.repeat(180)]) {
-    const r = await save(root, {title});
+    const r = await save(root, {title, url:'https://example.org/p/' + encodeURIComponent(title)});
     const [day, name] = r.path.split('/'); assert.equal(day, DAY); assert.equal(r.path.split('/').length, 2);
     assert.doesNotMatch(name, /^[. ]|[<>:"/\\|?*\x00-\x1f]| [.]md$|^(?:CON|NUL|COM[\d¹²³]|LPT\d)[.]/i);
     assert.ok(Buffer.byteLength(name) < 220); assert.equal(r.indexed, true);
@@ -199,7 +202,7 @@ test('concurrent saves and stale orphaned asset folders never replace notes, dir
   await day.getDirectoryHandle('same (2).md', {create: true});
   const assets = await day.getDirectoryHandle('assets', {create: true}), stale = await assets.getDirectoryHandle('same (3)', {create: true});
   await seed(stale, '01.png', '私人资源');
-  const r = await Promise.all(Array.from({length: 6}, (_, i) => save(root, {title: 'Same', body: `任务${i}：${tkn(0)}`, images: [{token: tkn(0), url: 'https://images.test/p.png', alt: '图'}]}, {getImage: picture})));
+  const r = await Promise.all(Array.from({length: 6}, (_, i) => save(root, {title: 'Same', url:`https://example.org/p/${i}`, body: `任务${i}：${tkn(0)}`, images: [{token: tkn(0), url: 'https://images.test/p.png', alt: '图'}]}, {getImage: picture})));
   assert.equal(new Set(r.map(s => s.path)).size, 6); assert.ok(r.every(s => s.indexed && !s.warnings.length));
   assert.equal(await root.text(`${DAY}/same.md`), '不要覆盖'); assert.equal(await root.text(`${DAY}/assets/same (3)/01.png`), '私人资源');
   const index = await root.text(INDEX); assert.equal(index.match(/^- \[Same\]/gm).length, 6);
@@ -235,24 +238,29 @@ test('long CJK/emoji titles and punctuation never enter a cover path, even after
 test('index dates sort newest first; preserves BOM, CRLF and custom bytes; identical note path is not reindexed', async () => {
   const root = new Dir(); const personal = '\uFEFF# 我的索引\r\n\r\n私人 [资料](notes.md)  \r\n';
   await seed(root, INDEX, personal);
-  for (const d of [4, 1, 7, 5, 5]) await save(root, {title: '图集'}, {date: new Date(2026, 4, d)});
+  for (const [i,d] of [4, 1, 7, 5, 5].entries()) await save(root, {title: '图集', url:`https://example.org/p/${i}`}, {date: new Date(2026, 4, d)});
   const file = await root.at(INDEX).getFile();
   const index = new TextDecoder('utf-8', {ignoreBOM: true}).decode(await file.arrayBuffer());
   assert.ok(index.startsWith(personal)); assert.ok(!/(?:^|[^\r])\n/.test(index));
   assert.deepEqual([...index.matchAll(/^## (\S+)\r?$/gm)].map(m => m[1]), ['2026-05-07', '2026-05-05', '2026-05-04', '2026-05-01']);
   // Simulate a user deleting the note but keeping its index entry. A resave can reuse its path.
   root.at('2026-05-07').items.delete('图集.md');
-  const r = await save(root, {title: '图集'}, {date: new Date(2026, 4, 7)});
+  const r = await save(root, {title: '图集', url:'https://example.org/p/2'}, {date: new Date(2026, 4, 7)});
   assert.ok(r.indexed); assert.equal((await root.text(INDEX)).match(/^- \[/gm).length, 5);
   assert.deepEqual(new Uint8Array(await (await root.at(INDEX).getFile()).arrayBuffer()), new Uint8Array(await file.arrayBuffer()));
 });
 
-test('index failure/malformed marker/non-UTF8 index preserves note and original bytes', async () => {
+test('index write failure retains the note; pre-existing malformed/non-UTF8 index blocks writing; original bytes are unchanged', async () => {
   for (const bytes of ['# 私人\r\n<!-- pageleaf:index:v1 -->\r\n', new Uint8Array([0xff, 0xfe, 0x49, 0x00]), '# 锁定的索引']) {
     const root = new Dir(), handle = await seed(root, INDEX, bytes), before = await (await handle.getFile()).arrayBuffer();
     if (bytes === '# 锁定的索引') root.state.fail = (operation, path) => { if (operation === 'close' && path === INDEX) throw new Error('不可写'); };
-    const r = await save(root); assert.equal(r.indexed, false); assert.match(r.warnings.join(''), /笔记已保存/);
-    assert.match(await root.text(r.path), /正文原文/); assert.deepEqual(await (await handle.getFile()).arrayBuffer(), before);
+    if (bytes === '# 锁定的索引') {
+      const r = await save(root); assert.equal(r.indexed, false); assert.match(r.warnings.join(''), /笔记已保存/);
+      assert.match(await root.text(r.path), /正文原文/);
+    } else {
+      await assert.rejects(save(root), /无法核实/); assert.equal(root.at(DAY), undefined); assert.equal(root.at('.pageleaf'), undefined);
+    }
+    assert.deepEqual(await (await handle.getFile()).arrayBuffer(), before);
   }
 });
 
@@ -261,8 +269,9 @@ test('same-realm queue still serializes saves when Web Locks are unavailable', a
   if (nav) Object.defineProperty(nav, 'locks', {value: undefined, configurable: true});
   try {
     const writes = await Promise.all(Array.from({length: 5}, () => save(root)));
-    assert.equal(new Set(writes.map(r => r.path)).size, 5);
-    assert.equal((await root.text(INDEX)).match(/^- \[/gm).length, 5);
+    assert.equal(new Set(writes.map(r => r.path)).size, 1);
+    assert.equal(writes.filter(r => r.duplicate).length, 4);
+    assert.equal((await root.text(INDEX)).match(/^- \[/gm).length, 1);
   } finally {
     if (nav && descriptor) Object.defineProperty(nav, 'locks', descriptor);
     else if (nav) delete nav.locks;
@@ -277,4 +286,67 @@ test('note or directory permission failure rejects and never changes the index; 
   await assert.rejects(save(root, {title: '樱花'}), /无权限/); assert.equal(await root.text(INDEX), '已有索引');
   delete root.state.fail;
   const r = await save(root, {title: '重试'}); assert.ok(r.indexed); assert.ok((await root.text(INDEX)).startsWith('已有索引'));
+});
+
+test('duplicate archive protection runs before asset work; immutable preview works across date/title changes and separate roots', async () => {
+  const root = new Dir(), other = new Dir(), c = clip({title:'笔记 # [甲]', body:tkn(0), images:[{token:tkn(0),url:'https://images.example/private'}]});
+  assert.deepEqual(await lookupClip(root, c), {state:'new'}); assert.equal(root.items.size,0);
+  let downloads=0;
+  const saves = await Promise.all(Array.from({length:4},()=>saveClip(root,c,{date:DATE,getImage:()=>{downloads++;return picture();}})));
+  assert.equal(saves.filter(x=>!x.duplicate).length,1); assert.equal(downloads,1);
+  const prior=saves[0], before=root.state.rev;
+  const renamed = {...c,title:'另一个标题',url:c.url+'?utm_source=feed#anchor',body:'改过版的正文'};
+  assert.equal((await lookupClip(root, renamed)).state,'saved');
+  assert.deepEqual(await saveClip(root,renamed,{date:new Date(2029,2,2)}),{path:prior.path,warnings:[],indexed:true,duplicate:true});
+  assert.equal(root.state.rev,before); assert.deepEqual(await lookupClip(other, renamed),{state:'new'}); assert.equal(other.items.size,0);
+  const selection = {...renamed,kind:'selection'};
+  assert.equal((await lookupClip(root,selection)).state,'new'); await saveClip(root,selection,{date:DATE});
+  assert.equal((await lookupClip(root,selection)).state,'saved');
+  assert.equal((await lookupClip(root,{...selection,body:'另一个摘录'})).state,'new');
+});
+
+test('red result remains identifiable without an index across a fresh read; metadata and status contain no raw warning, URL or snippet',async()=>{
+  const root=new Dir(), c=clip({body:'PRIVATE selection or article body',url:'https://private.example/p?token=TOKEN_DO_NOT_ECHO'});
+  root.state.fail=(op,path)=>{if(op==='close' && path===INDEX) throw Error('mock');};
+  const r=await saveClip(root,c,{date:DATE,warningsBeforeSave:['摘要生成失败：PRIVATE_SERVICE_SECRET','字幕补取失败']});
+  assert(!r.indexed); delete root.state.fail;
+  const key=await clipKey(c), receipt=await root.text(`.pageleaf/${key}.json`);
+  assert.deepEqual(JSON.parse(receipt),{format:'pageleaf/receipt/1',key,path:r.path});
+  const state=await lookupClip(root,c); assert.equal(state.state,'partial'); assert.equal(state.path,r.path); assert(!state.indexed);
+  assert.match(state.message,/摘要/); assert.match(state.message,/字幕/); assert.match(state.message,/索引/);
+  assert.doesNotMatch(state.message+receipt,/PRIVATE|TOKEN_DO_NOT|private\.example/);
+  const before=root.state.rev, duplicate=await saveClip(root,c); assert(duplicate.duplicate);assert(!duplicate.indexed);assert.equal(root.state.rev,before);
+  root.state.fail=(op,p)=>{if(op==='lookup' && p===INDEX) throw Error('PRIVATE_DIR');};
+  assert.equal((await lookupClip(root,c)).state,'partial');
+  await assert.rejects(lookupClip(root,{...c,url:'https://new.example/'}),e=>/无法核实/.test(e.message)&&!e.message.includes('PRIVATE_DIR'));
+});
+
+test('receipt alone is not proof: verify actual note/marker; deleted note permits resave and orphaned pointer never means saved',async()=>{
+  const root=new Dir(), c=clip(), r=await saveClip(root,c,{date:DATE});
+  assert.equal((await lookupClip(root,c)).state,'saved');
+  const dir=root.at(DAY),name=r.path.split('/')[1];dir.items.delete(name.toLowerCase());
+  assert.equal((await lookupClip(root,c)).state,'new');
+  const again=await saveClip(root,c,{date:DATE}); assert(!again.duplicate);assert.equal(again.path,r.path);
+  const previous=await root.text(r.path);
+  await seed(dir,name,previous.replace(/pageleaf:clip:v1 [a-f0-9]{64}/,'pageleaf:clip:v1 '+'0'.repeat(64)));
+  await assert.rejects(lookupClip(root,c),/无法核实/);
+  await seed(dir,name,'不是这篇笔记'); await assert.rejects(lookupClip(root,c),/无法核实/);
+});
+
+test('failure to create a receipt never commits a note, preserves unrelated metadata and permits retry after a failed first write',async()=>{
+  const root=new Dir(), c=clip(), key=await clipKey(c), name=key+'.json';
+  root.state.fail=(op,path)=>{if(op==='close' && path==='.pageleaf/'+name) throw Error('PRIVATE_DEVICE_PATH');};
+  await assert.rejects(save(root),e=>/未写入笔记/.test(e.message)&&!e.message.includes('PRIVATE_DEVICE_PATH'));
+  assert(!root.at(DAY+'/山海之间.md')); assert(!root.at(INDEX)); assert(!root.at('.pageleaf/'+name));
+  delete root.state.fail; assert.equal((await lookupClip(root,c)).state,'new'); assert((await save(root)).indexed);
+  const other=new Dir(), dir=await other.getDirectoryHandle('.pageleaf',{create:true});
+  await seed(dir,name,'私人数据'); await assert.rejects(save(other),/无法核实/); assert.equal(await other.text('.pageleaf/'+name),'私人数据');
+});
+
+test('indexed note marker recovers an exact image-only selection if the local locator was removed',async()=>{
+  const root=new Dir(), first=clip({kind:'selection',body:tkn(0),images:[{token:tkn(0),url:'https://a.example/原图.png',alt:'同名图'}]});
+  const r=await saveClip(root,first,{date:DATE,getImage:picture}); root.items.delete('.pageleaf');
+  const token=`PAGELEAFIMG${'11'.repeat(16)}X3END`, second={...first,body:token,images:[{...first.images[0],token}]};
+  assert.equal((await lookupClip(root,second)).path,r.path); assert(!root.at('.pageleaf'));
+  assert.equal((await lookupClip(root,{...second,images:[{...second.images[0],url:'https://b.example/原图.png'}]})).state,'new');
 });

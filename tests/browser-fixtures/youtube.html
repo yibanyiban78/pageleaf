@@ -2,7 +2,7 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><title>山溪观测 - YouTube</title><meta property="og:title" content="山溪观测"></head>
 <body><main><div id="movie_player"></div><h1>山溪观测</h1><div id="description"><p id="excerpt">视频选区标记：沿山溪行走，逐段记录。<img alt="选段草图" width="140" height="100" src="/media/map.png"></p></div></main>
 <script>
-const videoId = new URL(location.href).searchParams.get('v');
+const videoId = new URL(location.href).searchParams.get('v') || location.pathname.split('/').filter(Boolean).at(-1);
 const noCaptions = videoId === 'NoTrack0001';
 const channelId = 'UC' + 'a'.repeat(22);
 const data = {

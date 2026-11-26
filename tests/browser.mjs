@@ -1,17 +1,22 @@
 // Run from the project: node tests/browser.mjs. Requires installed desktop Chrome
 // supporting CDP Extensions.triggerAction; PAGELEAF_CHROME may name an alternative
-// full Chrome executable. Playwright creates/removes a new, empty temporary profile.
+// full Chrome executable. PAGELEAF_ZIP tests the ZIP itself. A fresh temporary
+// profile and (if applicable) fresh extracted extension are removed on exit.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
-import { posix, join } from 'node:path';
+import { readFile, readdir, mkdir, writeFile, mkdtemp, rm, realpath } from 'node:fs/promises';
+import { posix, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { runDedupChecks, articleFixtures, videoAliases, observeCaptures } from './dedup-browser.mjs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const extension = process.env.PAGELEAF_EXTENSION || fileURLToPath(new URL('../extension/', import.meta.url));
+let extension = process.env.PAGELEAF_EXTENSION || fileURLToPath(new URL('../extension/', import.meta.url));
 const expectedVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
-// Keep the already-delivered 1.1.0 evidence intact. New runs write to their version's directory.
+assert(!['1.0.0','1.1.0','1.1.1','1.2.0'].includes(expectedVersion),'Never overwrite historical evidence');
+// Keep all already-delivered evidence intact. New runs write to their version's directory.
 const evidence = join(here, 'evidence', expectedVersion);
 const fixture = name => readFile(join(here, 'browser-fixtures', name), 'utf8');
 const [articleHTML, videoHTML, captionJSON] = await Promise.all(['article.html', 'youtube.html', 'timedtext.json'].map(fixture));
@@ -85,55 +90,94 @@ async function nativePopup(browser, targetId) {
 }
 
 let ctx, settingsShot, narrowShot, previewShot;
+const scratch = await realpath(await mkdtemp(join(tmpdir(),'pageleaf-native-')));
 const chromePath = process.env.CHROME_PATH || process.env.PAGELEAF_CHROME;
 try {
-  ctx = await chromium.launchPersistentContext('', {
+  if(process.env.PAGELEAF_ZIP){
+    assert(!process.env.PAGELEAF_EXTENSION,'Choose ZIP or unpacked tree, not both');
+    const zip=await realpath(resolve(process.env.PAGELEAF_ZIP));
+    report.zipSha256=hash(await readFile(zip));
+    extension=join(scratch,'unpacked');
+    execFileSync('python',['-c',`import pathlib,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+ assert 'manifest.json' in z.namelist() and all(not pathlib.PurePosixPath(n).is_absolute() and not any(p in ('.','..') or ':' in p or '\\\\' in p for p in pathlib.PurePosixPath(n).parts) for n in z.namelist())
+ z.extractall(sys.argv[2])`,zip,extension],{stdio:'inherit'});
+  }
+  const launch = () => chromium.launchPersistentContext(join(scratch,'profile'), {
     ...(chromePath ? {executablePath:chromePath} : {channel:'chrome'}),
     headless:true, locale:'zh-CN', viewport:{width:1280,height:900},
     ignoreDefaultArgs:['--disable-extensions'],
     // No global/browser installation changes, network proxy, private user profile or CDP TCP port.
     args:['--enable-unsafe-extension-debugging','--no-proxy-server','--host-resolver-rules=MAP * ~NOTFOUND'],
   });
-  const browser = await ctx.browser().newBrowserCDPSession();
+  ctx=await launch();
+  let browser = await ctx.browser().newBrowserCDPSession();
   report.browser = (await browser.send('Browser.getVersion')).product;
   let failAI = false, failImage = false, concurrentGate = null;
   assert.match(report.browser,/^Chrome\/158\./,'This acceptance run targets full Chrome 158');
   let captionRequests = 0, assetRequests = 0;
   const calls = [], blocked = [], unexpectedAuth = [], routeErrors = [], scriptErrors = [];
-  ctx.on('page', p=>p.on('pageerror', e=>scriptErrors.push(String(e.message).slice(0,350))));
-  await ctx.route(/^https?:\/\//, async r=>{
+  const articles=articleFixtures(articleURL,articleHTML);
+  async function routes(){
+    ctx.on('page', p=>p.on('pageerror', e=>scriptErrors.push(String(e.message).slice(0,350))));
+    await ctx.route(/^https?:\/\//, async r=>{
     const q = r.request(), u = new URL(q.url());
     try {
       const auth = (await q.allHeaders()).authorization;
       if (auth && !(u.origin === new URL(api).origin && u.pathname === '/v1/chat/completions')) unexpectedAuth.push(u.origin);
       if (q.method() === 'OPTIONS') return await r.fulfill({status:204,headers:cors});
-      if (u.href === articleURL) return await r.fulfill({contentType:'text/html; charset=utf-8',body:articleHTML});
-      if ([videoURL,noVideoURL].includes(u.href)) return await r.fulfill({contentType:'text/html; charset=utf-8',body:videoHTML});
+      if (articles.has(u.href)) return await r.fulfill({contentType:'text/html; charset=utf-8',body:articles.get(u.href)});
+      if ([videoURL,noVideoURL,...videoAliases].includes(u.href)) return await r.fulfill({contentType:'text/html; charset=utf-8',body:videoHTML});
       if (u.origin === 'https://www.youtube.com' && u.pathname === '/api/timedtext') {
         captionRequests++;
         return await r.fulfill({contentType:'application/json',headers:cors,body:captionJSON});
       }
-      if ((['https://journal.pageleaf.test','https://www.youtube.com'].includes(u.origin) && /^\/media\/(?:map|shore)\.png$/.test(u.pathname)) || (u.origin === 'https://i.ytimg.com' && /^\/vi\/(?:Stream00001|NoTrack0001)\/cover\.png$/.test(u.pathname))) {
+      if ((['https://journal.pageleaf.test','https://www.youtube.com','https://youtu.be'].includes(u.origin) && /^\/media\/(?:map|shore)\.png$/.test(u.pathname)) || (u.origin === 'https://i.ytimg.com' && /^\/vi\/(?:Stream00001|NoTrack0001)\/cover\.png$/.test(u.pathname))) {
         assetRequests++;
         return await r.fulfill({status:failImage && u.pathname==='/media/shore.png'?404:200,headers:cors,contentType:'image/png',body:pictures[posix.basename(u.pathname,'.png')]});
       }
       if (u.href === api + '/chat/completions' && q.method() === 'POST') {
         calls.push({body:q.postDataJSON(),validHeader:auth===`Bearer ${token}`});
-        if(concurrentGate){const gate=concurrentGate;gate.arrivals++;if(gate.arrivals===2)gate.release();await gate.promise;}
+        if(concurrentGate){const gate=concurrentGate;gate.arrivals++;if(gate.arrivals===gate.autoRelease)gate.release();await gate.promise;}
         return await r.fulfill({status:failAI?503:200,headers:cors,contentType:'application/json',json:failAI?{error:{message:'fixture offline'}}:{choices:[{message:{role:'assistant',content:answer}}]}});
       }
       blocked.push(u.origin + u.pathname);
       return await r.abort('blockedbyclient');
     } catch(e) { routeErrors.push(e.message); await r.abort('failed').catch(()=>{}); }
-  });
+    });
+  }
+  await routes();
+  function holdPosts(autoRelease=0){
+    assert.equal(concurrentGate,null);const gate={arrivals:0,autoRelease};
+    gate.promise=new Promise(r=>{gate.release=r;});concurrentGate=gate;
+    return {arrivals:()=>gate.arrivals,release:()=>{gate.release();concurrentGate=null;}};
+  }
   report.extensionFingerprint=await buildFingerprint();
   const {id} = await browser.send('Extensions.loadUnpacked',{path:extension});
   const ext = `chrome-extension://${id}`;
+  // In real job documents only, observe create intents and actual writable
+  // streams. Always call through to the real API; record no file contents.
+  const mutations=[];
+  await ctx.exposeBinding('qaFileMutation',(source,operation,name)=>{if(source.page?.url().startsWith(ext+'/job.html#'))mutations.push({job:source.page,operation,name});});
+  await ctx.addInitScript(origin=>{
+    if(location.origin!==origin || location.pathname!=='/job.html')return;
+    for(const method of ['getDirectoryHandle','getFileHandle']){const original=FileSystemDirectoryHandle.prototype[method];FileSystemDirectoryHandle.prototype[method]=async function(name,options){if(options?.create)await window.qaFileMutation(method,name);return original.call(this,name,options);};}
+    const original=FileSystemFileHandle.prototype.createWritable;FileSystemFileHandle.prototype.createWritable=async function(options){await window.qaFileMutation('createWritable',this.name);return original.call(this,options);};
+  },ext);
   await ctx.addInitScript(origin=>{
     if (location.origin !== origin) return;
     window.showDirectoryPicker = async ()=>(await navigator.storage.getDirectory()).getDirectoryHandle('Pageleaf 验收目录',{create:true});
   }, ext);
-  const worker=ctx.serviceWorkers().find(w=>w.url().startsWith(ext+'/')) || await ctx.waitForEvent('serviceworker',w=>w.url().startsWith(ext+'/'));
+  const getWorker=async()=>ctx.serviceWorkers().find(w=>w.url().startsWith(ext+'/')) || await ctx.waitForEvent('serviceworker',w=>w.url().startsWith(ext+'/'));
+  let worker=await getWorker();
+  // Chrome exposes a title/badge getter but no icon getter. Observe successful
+  // calls to the REAL native setIcon, sampling the actual drawn pixel; never
+  // substitute a renderer or write an icon from the test itself.
+  async function observeToolbarWrites(){await until(()=>worker.evaluate(()=>Boolean(globalThis.chrome?.action?.setIcon)),'extension worker action initialization');await worker.evaluate(()=>{
+    const original=chrome.action.setIcon.bind(chrome.action);self.fixtureTabIcons={};
+    chrome.action.setIcon=async function(details){const result=await original(details);const img=details.imageData?.[32];let rgb=null;if(img){const x=Math.floor(img.width*.72),offset=4*(x*img.width+x);rgb=Array.from(img.data.slice(offset,offset+4));}self.fixtureTabIcons[details.tabId]={rgb,neutral:!!details.path};return result;};
+  });}
+  await observeToolbarWrites();
   await until(()=>worker.evaluate(()=>Boolean(globalThis.chrome?.runtime?.getManifest)),'extension worker runtime initialization');
   const manifest=await worker.evaluate(()=>chrome.runtime.getManifest());
   report.extensionVersion=manifest.version;
@@ -164,7 +208,7 @@ try {
       async function walk(dir,prefix){for await(const [name,handle] of dir.entries()){
         const path=prefix+name;entries.push(path+(handle.kind==='directory'?'/':''));
         if(handle.kind==='directory')await walk(handle,path+'/');
-        else {const f=await handle.getFile(),bytes=await crypto.subtle.digest('SHA-256',await f.arrayBuffer());digests[path]=Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');}
+        else {const f=await handle.getFile(),bytes=await crypto.subtle.digest('SHA-256',await f.arrayBuffer());digests[path]={sha256:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join(''),modified:f.lastModified};}
       }}
       await walk(await navigator.storage.getDirectory(),'');
       const {lastResult}=await chrome.storage.local.get('lastResult');
@@ -179,15 +223,16 @@ try {
   }
   async function openPreview(p, ready=true){
     await p.bringToFront();
-    const targets=await allTargets(),matches=targets.filter(t=>t.type==='tab'&&t.url===p.url());
-    assert.equal(matches.length,1,'Fixture URL must identify exactly one source tab');
+    const targets=await allTargets(),same=targets.filter(t=>t.type==='tab'&&t.url===p.url());
+    const matches=same.length===1?same:same.filter(t=>t.embedderData?.tabActive);
+    assert.equal(matches.length,1,'Fixture URL and active window must identify exactly one source tab');
     assert(!targets.some(t=>t.type==='page'&&t.url===ext+'/popup.html'),'Previous popup still open');
     await browser.send('Extensions.triggerAction',{id,targetId:matches[0].targetId});
     const target=await until(async()=>(await allTargets()).find(t=>t.type==='page'&&t.url===ext+'/popup.html'),'toolbar popup target');
     const popup=await nativePopup(browser,target.targetId);
     assert(await popup.evaluate("chrome.extension.getViews({type:'popup'}).includes(window)"),'Not a native toolbar popup');
-    const state=()=>popup.evaluate(`(()=>{const q=id=>document.getElementById(id);return {${['title','kind','destination','status','source','author','byline-label','excerpt','images','cover','captions','summary'].map(id=>`${JSON.stringify(id)}:q(${JSON.stringify(id)})?.textContent`).join(',')},disabled:q('confirm')?.disabled,settingsVisible:q('settings')?.checkVisibility()}})()`);
-    const ui=await until(async()=>{const ui=await state();return (ready?ui.disabled===false:ui.disabled&&ui.settingsVisible&&ui.status&&!ui.status.includes('正在读取'))&&ui;},'popup preview '+(ready?'ready':'blocked')).catch(async e=>{throw Error(e.message+'; UI='+JSON.stringify(await state()));});
+    const state=()=>popup.evaluate(`(()=>{const q=id=>document.getElementById(id);return {${['title','kind','destination','status','source','author','byline-label','excerpt','images','cover','captions','summary','capture-state','saved-at'].map(id=>`${JSON.stringify(id)}:q(${JSON.stringify(id)})?.textContent`).join(',')},capture:q('capture-state')?.dataset.state,savedAt:q('saved-at')?.dateTime,disabled:q('confirm')?.disabled,settingsVisible:q('settings')?.checkVisibility()}})()`);
+    const ui=await until(async()=>{const ui=await state();return (typeof ready==='string'?ui.capture===ready:ready?ui.disabled===false:ui.capture!=='checking'&&ui.disabled&&ui.settingsVisible&&ui.status&&!ui.status.includes('正在读取'))&&ui;},'popup preview '+String(ready)).catch(async e=>{throw Error(e.message+'; UI='+JSON.stringify(await state()));});
     return Object.assign(popup,{ui,state,waitClosed:async()=>{try{await until(async()=>!(await allTargets()).some(t=>t.targetId===target.targetId),'native popup renderer destruction');}catch(e){throw Error(e.message+'; '+await popup.evaluate(`JSON.stringify({viewport:[innerWidth,innerHeight],button:document.querySelector('#cancel').getBoundingClientRect(),status:document.querySelector('#status').textContent,focus:document.activeElement.id})`));}}});
   }
   async function confirm(popup){
@@ -216,6 +261,7 @@ try {
   }
   const fresh=await effects();assert.deepEqual(fresh.entries,[]);assert.equal(fresh.jobs,0);assert.equal(fresh.settings,0);
   const missing=await openPreview(article,false);
+  assert(['unknown','error'].includes(missing.ui.capture),'Missing directory must not be orange');
   assert.match(missing.ui.destination,/未选择/);assert.match(missing.ui.summary,/未.*就绪|不生成摘要/);
   assert.match(missing.ui.status,/目录|文件夹|授权/);assert.equal(missing.ui.disabled,true);assert.equal(missing.ui.title,'潮间带观测手记');
   await unchanged(fresh,'Missing root must not create a task, a settings tab, files or requests');
@@ -291,7 +337,7 @@ try {
         const path=prefix+n;
         if (h.kind==='directory') {await visit(h,path+'/');continue;}
         const f=await h.getFile();
-        if (/\.md$/i.test(n)) {out[path]={text:await f.text()};continue;}
+        if (/\.(md|json)$/i.test(n)) {out[path]={text:await f.text()};continue;}
         const bitmap=await createImageBitmap(f); // decode the saved bytes, without a network URL
         out[path]={size:f.size,width:bitmap.width,height:bitmap.height,sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await f.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('')};bitmap.close();
       }}
@@ -316,8 +362,10 @@ try {
   function articlePreview(ui){
     assert.equal(ui.kind,'整篇文章'); assert.equal(ui.title,'潮间带观测手记');assert.equal(ui.author,'林青');assert.equal(ui.source,articleURL);
     assert.match(ui.excerpt,/标记正文/);assert.match(ui.images,/2 张/);assert.match(ui.destination,/Pageleaf 验收目录\/\d{4}-\d{2}-\d{2}\/.*\.md/);
-    assert.match(ui.summary,/正文.*AI|AI.*正文/);assert.match(ui.status,/尚未保存/);assert.equal(ui.disabled,false);
+    assert.match(ui.summary,/正文.*AI|AI.*正文/);assert.equal(ui.capture,'new');assert.match(ui['capture-state'],/未剪藏/);assert.equal(ui.disabled,false);
   }
+  const readIcon=tabId=>worker.evaluate(id=>self.fixtureTabIcons?.[id]||null,tabId);
+  const observe=observeCaptures({openPreview,effects,unchanged,until,report,evidence,readIcon});
   const empty=await effects();assert.deepEqual(empty.entries,['Pageleaf 验收目录/']);assert.equal(empty.chatPosts,0);assert.equal(empty.jobs,0);
   for(const action of ['取消','Escape','切换标签']){
     const preview=await openPreview(article);articlePreview(preview.ui);
@@ -347,8 +395,10 @@ try {
   const switched=await openPreview(article);
   await settings.evaluate(async()=>{const {getRoot,setRoot}=await import('./store.js');window.qaOriginalRoot=await getRoot();await setRoot(await (await navigator.storage.getDirectory()).getDirectoryHandle('Second fixture root',{create:true}));});
   const swapped=await effects();assert.deepEqual(swapped.entries,['Pageleaf 验收目录/','Second fixture root/']);
-  await switched.click('#confirm');
-  await until(async()=>{const ui=await switched.state();return ui.disabled&&/目录.*改变|目录.*变更/.test(ui.status);},'rejection of stale directory');
+  // Root-change notification may already have invalidated and disabled the
+  // draft. If not, the click must be rejected independently at handoff.
+  if(!(await switched.state()).disabled){try{await switched.click('#confirm');}catch(e){if(!/Button unavailable/.test(e.message))throw e;}}
+  await until(async()=>{const ui=await switched.state();return ui.disabled&&ui.capture!=='new'&&/目录|文件夹/.test(ui.status);},'rejection of stale directory');
   await switched.click('#cancel');await switched.waitClosed();await unchanged(swapped,'Stale folder confirmation did not write to either directory');
   await settings.evaluate(async()=>{await (await import('./store.js')).setRoot(window.qaOriginalRoot);delete window.qaOriginalRoot;});
   checked('Changed the persisted directory handle after preview: confirmation rejected, both real OPFS directories stayed empty, and no job or settings redirect occurred');
@@ -359,6 +409,7 @@ try {
   assert(!full.text.includes('NOISE_')); assert.equal(calls.length,1);
   assert.match(plainInput(0),/标记正文/);assert.match(plainInput(0),/未选标记/);assert.doesNotMatch(plainInput(0),/NOISE_|https?:|<img|!\[|\*\*|Bearer|PAGELEAFIMG/);
   checked('Article: native toolbar → clean formatted Markdown, author/source/caption, two byte-identical local assets and plain-text-only mock Chinese summary');
+  await observe(article,'saved',full.r);checked('Reopening a saved article shows the original date/path, prevents confirmation, and does not touch any file, index, API, media or job');
   async function selectExcerpt(p){await p.locator('#excerpt').evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);});}
   await selectExcerpt(article);
   const sel=await saved(article,'ok',['map'],{
@@ -367,6 +418,14 @@ try {
   });
   assert.match(sel.text,/选区标记/);assert.match(sel.text,/\*\*观察芦苇\*\*/);assert.match(sel.text,/https:\/\/journal\.pageleaf\.test\/reference\/field-guide/);assert.doesNotMatch(sel.text,/标记正文|未选标记|模拟摘要/);assert.equal(calls.length,1);
   checked('Selection snapshot: changed the source highlight while the popup stayed open; confirmation saved the originally previewed formatted selection and its image, with no AI request');
+  await selectExcerpt(article);
+  const distinctTokens=await settings.evaluate(async url=>{const tab=(await chrome.tabs.query({})).find(t=>t.url===url);const get=async()=>{const [v]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:'ISOLATED',files:['extract.js']});const token=v.result?.images?.[0]?.token;return token&&v.result.body.includes(token)?token:null;};const [a,b]=[await get(),await get()];return !!a&&!!b&&a!==b;},articleURL);
+  assert(distinctTokens,'Fresh selection snapshots must really differ in their image token');report.distinctSelectionImageTokens=true;
+  await observe(article,'saved',sel.r);
+  await article.locator('h2').evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);});
+  const secondSelection=await saved(article,'ok',[],{verify:ui=>{assert.equal(ui.capture,'new');assert.equal(ui.kind,'选段摘录');}});
+  assert.match(secondSelection.text,/样点与潮线/);assert.doesNotMatch(secondSelection.text,/选区标记/);assert.equal(calls.length,1);
+  checked('Repeated selection with a fresh extraction/image token maps to the first note; a different same-page selection saves separately without invoking AI');
   const video=await ctx.newPage();await video.goto(videoURL);
   await selectExcerpt(video);const videoSel=await saved(video,'ok',['map']);
   assert.match(videoSel.text,/视频选区标记/);assert.doesNotMatch(videoSel.text,/字幕起点|视频简介标记/);assert.equal(calls.length,1);assert.equal(captionRequests,0);
@@ -377,26 +436,34 @@ try {
   assert.match(yt.text,/https:\/\/www\.youtube\.com\/watch\?v=Stream00001(?:&amp;|&)t=74s?/);assert.equal(calls.length,2);assert(captionRequests>=1);
   const transcript=plainInput(1);assert.match(transcript,/字幕起点/);assert.match(transcript,/字幕尾点/);assert.doesNotMatch(transcript,/简介|山溪观测|水文工作室|https?:/);
   checked('YouTube player → real JSON3 request → full captions + 74s jump link, linked channel, description, local cover; AI receives captions only');
-  await video.goto(noVideoURL);const none=await saved(video,'warn',['cover']);
+  for(const url of videoAliases){await video.goto(url);await observe(video,'saved',yt.r);}
+  checked('watch timestamp, youtu.be short URL and shorts route for the same YouTube video all resolve to its original note with no extra caption/cover/AI request');
+  await video.goto(noVideoURL);const none=await saved(video,'warn',['cover'],{verify:ui=>assert.equal(ui.capture,'new')});
   assert.match(none.r.message,/字幕/);assert.doesNotMatch(none.text,/模拟摘要|字幕起点/);assert.match(none.text,/视频简介标记/);assert.equal(calls.length,2);
   checked('Video without subtitles: metadata + local cover saved with warning, zero AI requests and no invented summary');
   failAI=true;failImage=true;
-  await article.evaluate(()=>getSelection().removeAllRanges());
-  const degraded=await saved(article,'warn',['map']);
+  await article.goto(articleURL+'-storm'); // a genuinely different dispatch sharing the same editorial title
+  const degraded=await saved(article,'warn',['map'],{verify:ui=>assert.equal(ui.capture,'new')});
   assert.match(degraded.text,/标记正文/);assert.match(degraded.text,/https:\/\/journal\.pageleaf\.test\/media\/shore\.png/);assert.match(degraded.r.message,/503/);assert.equal(calls.length,3);assert.notEqual(degraded.r.path,full.r.path);
   checked('AI 503 + image 404: full note still saved under a new name, original image URL recorded; original note not overwritten');
   failAI=false;failImage=false;
+  await observe(article,'partial',degraded.r);await observe(video,'partial',none.r);
+  checked('Partial notes are red/incomplete, have a real saved path, and cannot silently retry or create another note after recovery');
   await settings.evaluate(()=>{window.pairedResults=[];chrome.storage.onChanged.addListener((delta,area)=>{if(area==='local' && delta.lastResult?.newValue)window.pairedResults.push(delta.lastResult.newValue);});});
-  const pair={arrivals:0}; pair.promise=new Promise(resolve=>{pair.release=resolve;});concurrentGate=pair;
+  const other=await ctx.newPage();await other.goto(articleURL+'-east');await article.goto(articleURL+'-west');
+  const pair=holdPosts(2);
   try {
     await confirm(await openPreview(article));
-    await until(()=>pair.arrivals===1,'first confirmed job to reach mock API');
-    await confirm(await openPreview(article));
-    await until(()=>pair.arrivals===2,'both independent jobs to reach the mock API concurrently');
+    await until(()=>pair.arrivals()===1,'first confirmed job to reach mock API');
+    await confirm(await openPreview(other));
+    await until(()=>pair.arrivals()===2,'both independent jobs to reach the mock API concurrently');
     const results=await until(()=>settings.evaluate(()=>window.pairedResults.length===2 && window.pairedResults),'both concurrent notes');
     for(const result of results)await verifySaved(result,'ok',['map','shore']);
-  } finally {pair.release();concurrentGate=null;}
-  checked('Two overlapping native toolbar jobs reached the API before either was released: both notes, separate local media directories and index entries survived');
+  } finally {pair.release();}
+  checked('Two genuinely different articles with the same editorial title: both overlapping native toolbar jobs reached the API before release and retained separate notes, media and index entries');
+  const switchRoot=async name=>settings.evaluate(async name=>{const {setRoot}=await import('./store.js');await setRoot(await (await navigator.storage.getDirectory()).getDirectoryHandle(name,{create:true}));},name);
+  const waitNeutral=id=>until(()=>worker.evaluate(async id=>{const title=await chrome.action.getTitle({tabId:id});return !/已保存|已剪藏|正在保存|未保存|异常|失败/.test(title)&&self.fixtureTabIcons?.[id]?.neutral&&await chrome.action.getBadgeText({tabId:id})==='';},id),'neutral toolbar icon/title before another click, tab '+id);
+  await runDedupChecks({article,other,articleURL,settings,files,clip,openPreview,confirm,observe,effects,unchanged,holdPosts,verifySaved,switchRoot,selectExcerpt,until,checked,report,full,mutations,waitNeutral});
   const vault=await files();assert.equal(vault[full.r.path].text,full.text);
   const index=vault['剪藏索引.md']?.text; assert(index,'Missing root index');
   const indexTargets=[...index.matchAll(/\[[^\n]*?\]\(([^)]+\.md)\)/g)].map(m=>decodeURIComponent(m[1]));
@@ -404,17 +471,29 @@ try {
   assert(!JSON.stringify(vault).includes(token)); assert.deepEqual(unexpectedAuth,[]);assert.deepEqual(routeErrors,[]);assert.deepEqual(scriptErrors,[]);
   checked('Root index links resolve exactly once to each saved note, all relative asset links resolve under the vault, and no fixture credential leaked to output or other hosts');
   report.archive={paths,files:vault};
-  // Use another newly created OPFS root; the verified archive above stays unchanged.
-  await settings.evaluate(async()=>{
-    const {setRoot}=await import('./store.js'), dir=await (await navigator.storage.getDirectory()).getDirectoryHandle('Index collision fixture',{create:true});
-    await dir.getDirectoryHandle('剪藏索引.md',{create:true});await setRoot(dir);
-  });
-  await selectExcerpt(article);
-  const indexFailure=await clip(article);assert.equal(indexFailure.state,'warn',indexFailure.message);assert.match(indexFailure.message,/笔记已保存[，,]索引未更新/);
-  assert.match((await files())[indexFailure.path]?.text,/选区标记/);
-  checked('Real OPFS index path collision: note remains readable; native completion explicitly distinguishes note saved from index not updated');
+  // A locked, readable index distinguishes a real write failure AFTER the note
+  // from an unreadable lookup, which must fail closed BEFORE a save can start.
+  await switchRoot('Index write lock fixture');await article.goto(articleURL);await selectExcerpt(article);
+  await settings.evaluate(async()=>{const root=await (await import('./store.js')).getRoot(),h=await root.getFileHandle('剪藏索引.md',{create:true});window.indexWriter=await h.createWritable({mode:'exclusive'});});
+  let indexFailure;
+  try{indexFailure=await clip(article);}finally{await settings.evaluate(()=>window.indexWriter.abort());}
+  assert.equal(indexFailure.state,'warn',indexFailure.message);assert.match(indexFailure.message,/笔记已保存[，,]索引未更新/);
+  assert.match((await files())[indexFailure.path]?.text,/选区标记/);await observe(article,'partial',indexFailure);
+  checked('Real OPFS exclusive writer blocked the final index update: the native result says note saved, index not updated; after releasing the writer the note still resolves as partial without another save');
+  await switchRoot('Unreadable index fixture');await settings.evaluate(async()=>{const root=await (await import('./store.js')).getRoot();await root.getDirectoryHandle('剪藏索引.md',{create:true});});
+  const beforeBad=await effects(),bad=await openPreview(article,false);assert(['unknown','error'].includes(bad.ui.capture));assert(bad.ui.disabled);await bad.click('#cancel');await bad.waitClosed();await unchanged(beforeBad,'Index lookup failed closed');
+  checked('A pre-existing directory in place of the index never appears orange/new or allows confirmation; zero writes/requests');
+  await switchRoot('Pageleaf 验收目录');
+  // Close the actual Chrome process. Relaunch the identical unpacked package
+  // at the same path and profile; do not copy browser storage or recreate files.
+  await ctx.close();ctx=await launch();await routes();browser=await ctx.browser().newBrowserCDPSession();
+  const registration=await browser.send('Extensions.loadUnpacked',{path:extension});assert.equal(registration.id,id);worker=await getWorker();await observeToolbarWrites();
+  browser.on('Target.targetCreated',record);browser.on('Target.targetInfoChanged',record);await browser.send('Target.setDiscoverTargets',{discover:true,filter:[{}]});
+  const reopened=await ctx.newPage();await reopened.goto(articleURL);await observe(reopened,'saved',full.r);
+  await reopened.goto(articleURL+'-storm');await observe(reopened,'partial',degraded.r);
+  checked('Actual Chrome restart with the same isolated profile and unpacked extension: full and partial archives reopen with their original paths/dates, zero new jobs/files/API/media');
   assert.deepEqual(unexpectedAuth,[]);assert.deepEqual(routeErrors,[]);assert.deepEqual(scriptErrors,[]);assert.deepEqual(blocked,[]);
   assert.equal(await buildFingerprint(),report.extensionFingerprint,'Unpacked extension files changed during this run; rerun against one build');
   report.indexFailure=indexFailure;report.networkCounts={chatPosts:calls.length,captionRequests,assetRequests,blockedUnrecognized:blocked};report.passed=true;
 } catch(e) {report.passed=false;report.failure=String(e.message).replaceAll(token,'[redacted]').slice(0,2500);console.error(String(e.stack ?? report.failure).replaceAll(token,'[redacted]'));process.exitCode=1;}
-finally {await ctx?.close(); await mkdir(evidence,{recursive:true});if(previewShot)await writeFile(join(evidence,'popup-article.png'),previewShot);if(settingsShot)await writeFile(join(evidence,'settings-desktop.png'),settingsShot);if(narrowShot)await writeFile(join(evidence,'settings-mobile.png'),narrowShot);await writeFile(join(evidence,'browser.json'),JSON.stringify(report,null,2)+'\n');}
+finally {await ctx?.close(); assert.equal(await realpath(scratch),scratch);assert.equal(posix.basename(scratch.replaceAll('\\','/')).startsWith('pageleaf-native-'),true);await rm(scratch,{recursive:true,force:true,maxRetries:3});await mkdir(evidence,{recursive:true});if(previewShot)await writeFile(join(evidence,'popup-article.png'),previewShot);if(settingsShot)await writeFile(join(evidence,'settings-desktop.png'),settingsShot);if(narrowShot)await writeFile(join(evidence,'settings-mobile.png'),narrowShot);await writeFile(join(evidence,'browser.json'),JSON.stringify(report,null,2)+'\n');}

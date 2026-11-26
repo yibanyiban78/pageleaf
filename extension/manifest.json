@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "页笺 · 本地 Markdown 剪藏",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "先预览文章、选段或 YouTube 视频，确认后再将笔记、配图、字幕与中文摘要归档到本地。",
   "minimum_chrome_version": "122",
   "permissions": ["activeTab", "scripting", "storage"],

@@ -1,5 +1,5 @@
-// CLIP-007 • Windows desktop, Chrome with Extensions.triggerAction, Node 24+, Python 3.
-// npm ci; python tools/package_store.py; node tests/store-profiles.mjs
+// CLIP-009 • Windows desktop, Chrome with Extensions.triggerAction, Node 24+, Python 3.
+// npm ci; prepare release/pageleaf-1.3.0.zip (GitHub manual-install ZIP); node tests/store-profiles.mjs
 // Clean checkout without the old ZIP? In PowerShell, from the project:
 //   $old = Join-Path $env:TEMP ('pageleaf-tag-' + [guid]::NewGuid())
 //   git -c core.autocrlf=false clone --depth 1 --branch v1.1.1-rc.1 https://github.com/yibanyiban78/pageleaf.git $old
@@ -17,10 +17,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
-const oldVersion='1.1.1', version='1.2.0', archive=`pageleaf-cws-${version}.zip`;
+const oldVersion='1.1.1', version='1.3.0', archive=`pageleaf-${version}.zip`;
 const oldZip=process.env.PAGELEAF_OLD_ZIP || join(project,'release',`pageleaf-cws-${oldVersion}.zip`);
 const oldHash='123b2e7ee993a073e230241427baf67be53973b441c84073d5232525e483a716';
-const zip=join(project,'release',archive);
+const zip=process.env.PAGELEAF_NEW_ZIP || join(project,'release',archive);
 let png; // Reuse the pinned old ZIP’s valid 16px icon as the mock HTTPS raster.
 const digest = data => createHash('sha256').update(data).digest('hex');
 const index = '剪藏索引.md';
@@ -37,16 +37,19 @@ function fixture(name) {
     notes:[], posts:0, httpsGets:0, httpAttempts:0, violations:0, logLeaks:0, snapshots:{} };
 }
 const profiles = [fixture('Amber'), fixture('Cobalt')];
-const report = {task:'CLIP-007',startedAt:new Date().toISOString(),device:process.env.COMPUTERNAME,
+const report = {task:'CLIP-009',startedAt:new Date().toISOString(),device:process.env.COMPUTERNAME,
   platform:process.platform,node:process.version,baseline:oldVersion,baselineSha256:oldHash,candidate:archive,version,runs:[]};
 const secrets=profiles.flatMap(p=>[p.token,p.pass]);
 const redact=text=>secrets.reduce((s,value)=>s.replaceAll(value,'[redacted]'),String(text));
 const noSecrets=value=>secrets.every(x=>!String(value).includes(x));
 function spec(p,phase) {
-  const stem=`article-${p.name.toLowerCase()}.pageleaf.test`, media=phase!=='baseline';
-  return {title:`${p.name} ${phase}`, marker:`${p.name}Body${phase}`,summary:`${p.name}Summary${phase}`,
-    url:`https://${stem}/entry/${phase}`, media, ai:['baseline','unlocked','reloaded'].includes(phase),
-    http:`http://${stem}/original.png?signature=fixture%2B${phase}&page=1`, https:`https://${stem}/allowed-${phase}.png`};
+  // Both profiles visit the exact same URLs; mock pages contain distinct per-profile body markers.
+  const stem='article.pageleaf.test',selection=/^excerpt[12]$/.test(phase),page=selection?'unlocked':phase;
+  const portions=[`${p.name}ExcerptOne`,`${p.name}ExcerptTwo`],bodyMarker=`${p.name}Body${page}`;
+  return {phase,selection,portions,bodyMarker,title:`${p.name} ${page}`,marker:selection?portions[Number(phase.at(-1))-1]:bodyMarker,
+    summary:`${p.name}Summary${page}`,url:`https://${stem}/entry/${page}`,hasImages:page!=='baseline',media:!selection && page!=='baseline',
+    ai:!selection && ['baseline','unlocked','reloaded'].includes(phase),partial:['legacy','locked'].includes(phase),
+    http:`http://${stem}/original.png?signature=fixture%2B${page}&page=1`,https:`https://${stem}/allowed-${page}.png`};
 }
 
 // Only address controls owned by the precise CDP browser PID. Never use SendKeys,
@@ -120,8 +123,8 @@ async function route(s, r) {
   if(!opt || !noSecrets(u.href) || !noSecrets(req.postData()||'') || !noSecrets(JSON.stringify({...h,authorization:undefined})) || h.cookie) return bad();
   if(u.href===opt.url && req.method()==='GET' && !h.authorization) {
     // Neither data-original URL is requested by the page or upgraded as mixed content by Chrome.
-    const images=opt.media?`<p><img alt="HTTP original" width="16" height="16" data-original="${opt.http.replaceAll('&','&amp;')}"> <img alt="HTTPS raster" width="16" height="16" data-original="${opt.https}"></p>`:'';
-    const html=`<!doctype html><meta charset=utf-8><link rel=icon href="data:,"><title>${opt.title}</title><article><h1>${opt.title}</h1><p>${opt.marker} 合成观测记录，以独立浏览器资料分别剪藏并校验对应索引，不含任何真实用户内容。</p>${images}</article>`;
+    const images=opt.hasImages?`<p><img alt="HTTP original" width="16" height="16" data-original="${opt.http.replaceAll('&','&amp;')}"> <img alt="HTTPS raster" width="16" height="16" data-original="${opt.https}"></p>`:'';
+    const html=`<!doctype html><meta charset=utf-8><link rel=icon href="data:,"><title>${opt.title}</title><article><h1>${opt.title}</h1><p>${opt.bodyMarker} 合成观测记录，以独立浏览器资料分别剪藏并校验对应索引，不含任何真实用户内容。</p><p id="passage1">${opt.portions[0]}</p><p id="passage2">${opt.portions[1]}</p>${images}</article>`;
     return r.fulfill({contentType:'text/html; charset=utf-8',body:html});
   }
   if(s.confirmed && opt.media && u.href===opt.https && req.method()==='GET' && !h.authorization && !h.referer && req.resourceType()==='fetch'){
@@ -239,30 +242,62 @@ async function setup(s) {
   await tab.waitForFunction(()=>document.querySelector('#aimsg').textContent.includes('设置已保存'),null,{timeout:7000});
   await tab.reload();await tab.waitForFunction(model=>document.querySelector('#model').value===model,p.model);
 }
-async function confirm(s,phase){
-  const p=s.profile,tab=s.settings,opt=s.active=spec(p,phase),images=p.httpsGets;s.confirmed=false;
+const targets=async s=>(await s.b.send('Target.getTargets',{filter:[{}]})).targetInfos;
+async function openPreview(s,opt){
+  const p=s.profile,prior=await tree(join(ev,p.vault)),posts=p.posts,images=p.httpsGets;
+  s.active=opt;s.confirmed=false;
   const article=await s.ctx.newPage();await article.goto(opt.url);await article.bringToFront();
-  const list=async()=>(await s.b.send('Target.getTargets',{filter:[{}]})).targetInfos;
-  const source=(await list()).find(t=>t.type==='tab'&&t.url===opt.url);assert(source);
-  const before=await tree(join(ev,p.vault)),posts=p.posts;
+  if(opt.selection){
+    const selected=await article.evaluate(n=>{
+      const text=document.createTreeWalker(document.querySelector(`#passage${n}`),NodeFilter.SHOW_TEXT).nextNode();
+      const r=new Range();r.setStart(text,0);r.setEnd(text,text.length);const selection=getSelection();selection.removeAllRanges();selection.addRange(r);return selection.toString();
+    },opt.phase.at(-1));assert.equal(selected,opt.marker);
+  }
+  const source=(await targets(s)).find(t=>t.type==='tab'&&t.url===opt.url);assert(source);
   await s.b.send('Extensions.triggerAction',{id:extensionId,targetId:source.targetId});
-  // Read from a same-extension view. Never navigate a tab to popup.html or call
-  // preview/confirm/archive ourselves. The button invokes the actual popup handler.
-  const ui=await until(()=>tab.evaluate(()=>{
-    const a=chrome.extension.getViews({type:'popup'});if(a.length!==1) return null;
-    const q=id=>a[0].document.getElementById(id);return q('confirm')?.disabled===false && {
-      title:q('title').textContent,destination:q('destination').textContent,source:q('source').textContent,summary:q('summary').textContent};
-  }),`native preview for ${opt.title}`);
-  assert.equal(ui.title,opt.title);assert.equal(ui.source,opt.url);assert(ui.destination.startsWith(`${p.vault}/`));
-  if(!opt.ai)assert.match(ui.summary,phase==='legacy'?/保护|迁移/:/锁/);
-  assert(noSecrets(JSON.stringify(ui)));assert.equal(p.posts,posts);assert.equal(p.httpsGets,images);assert.deepEqual(await tree(join(ev,p.vault)),before);
-  s.confirmed=true;await tab.evaluate(()=>{const views=chrome.extension.getViews({type:'popup'});if(views.length!==1)throw Error('Native popup lost');views[0].document.querySelector('#confirm').click();});
-  const result=await until(()=>tab.evaluate(async title=>{const {lastResult:r}=await chrome.storage.local.get('lastResult');return r?.path?.endsWith('/'+title+'.md') && {state:r.state,path:r.path};},opt.title),`new note after confirmation for ${opt.title}`,18000);
-  assert.equal(result.state,opt.ai?'ok':'warn',`${p.name} ${phase}: result status`);assert.match(result.path,/^\d{4}-\d\d-\d\d\/[^/]+\.md$/);
+  // Read only from the actual popup. Do not call the extension’s lookup/confirm/archive internals.
+  const ui=await until(()=>s.settings.evaluate(old=>{
+    const views=chrome.extension.getViews({type:'popup'});if(views.length!==1)return null;
+    const q=id=>views[0].document.getElementById(id),state=q('capture-state')?.dataset.state;
+    if(!q('confirm') || (old?q('confirm').disabled:!['new','saved','partial','error'].includes(state)))return null;
+    return {state,disabled:q('confirm').disabled,label:q('capture-state')?.textContent||'',dot:old?'':views[0].getComputedStyle(q('capture-state'),'::before').backgroundColor,
+      savedDate:q('saved-at')?.textContent||'',kind:q('kind').textContent,title:q('title').textContent,
+      destination:q('destination').textContent,source:q('source').textContent,summary:q('summary').textContent};
+  },s.expectedVersion===oldVersion),`settled toolbar preview for ${opt.title}/${opt.phase}`);
+  assert.equal(ui.title,opt.title);assert.equal(ui.source,opt.url);assert.equal(ui.kind,opt.selection?'选段摘录':'整篇文章');
+  if(s.expectedVersion!==oldVersion){
+    const [r,g,b]=(ui.dot.match(/\d+/g)||[]).map(Number);assert.match(ui.label,{new:/未(?:剪藏|保存)/,saved:/已(?:剪藏|保存)/,partial:/不完整|异常|部分/,error:/失败|异常/}[ui.state]);
+    assert(ui.state==='new'?r>g&&g>b:ui.state==='saved'?g>r&&g>b:r>g&&r>b&&b>=g,`Unexpected ${ui.state} popup dot: ${ui.dot}`);
+  }
+  assert(noSecrets(JSON.stringify(ui)));assert.equal(p.posts,posts);assert.equal(p.httpsGets,images);assert.deepEqual(await tree(join(ev,p.vault)),prior,'Preview wrote to disk');
+  return {article,ui};
+}
+async function checkExisting(s,n,label){
+  const p=s.profile,other=profiles.find(o=>o!==p),before=await tree(join(ev,p.vault)),foreign=await tree(join(ev,other.vault)),posts=p.posts,images=p.httpsGets;
+  const {article,ui}=await openPreview(s,n);
+  assert.equal(ui.state,n.partial?'partial':'saved',`${label}: expected known capture`);assert(ui.disabled,'Known capture allows a second save');
+  assert.equal(ui.destination,n.path,'Known capture did not show its actual existing path');assert.equal(ui.savedDate,n.path.split('/')[0]);
+  await s.settings.evaluate(()=>{const ui=chrome.extension.getViews({type:'popup'})[0];ui.document.querySelector('#confirm').click();ui.document.querySelector('#cancel').click();});
+  await until(async()=>!(await targets(s)).some(t=>t.url===`chrome-extension://${extensionId}/popup.html`),'closed duplicate popup');
+  s.active=null;await article.close();assert.deepEqual(await tree(join(ev,p.vault)),before);assert.deepEqual(await tree(join(ev,other.vault)),foreign);
+  assert.equal(p.posts,posts);assert.equal(p.httpsGets,images);assert.equal(p.violations,0);
+  return {scenario:label,state:ui.state,label:ui.label,popupDot:ui.dot,originalPath:n.path,savedDate:ui.savedDate,disabled:true,extraWrites:false,extraModelCalls:0,extraImageRequests:0};
+}
+async function confirm(s,phase){
+  const p=s.profile,opt=spec(p,phase),images=p.httpsGets,posts=p.posts;
+  const {article,ui}=await openPreview(s,opt);assert(!ui.disabled);assert(ui.destination.startsWith(`${p.vault}/`));
+  if(s.expectedVersion!==oldVersion){assert.equal(ui.state,'new');assert(ui.label.trim());}
+  if(opt.partial)assert.match(ui.summary,phase==='legacy'?/保护|迁移/:/锁/);
+  if(opt.selection)assert.match(ui.summary,/不调用 AI/);
+  s.confirmed=true;await s.settings.evaluate(()=>{const views=chrome.extension.getViews({type:'popup'});if(views.length!==1)throw Error('Native popup lost');views[0].document.querySelector('#confirm').click();});
+  const oldPaths=p.notes.map(n=>n.path);
+  const result=await until(()=>s.settings.evaluate(async previous=>{const {lastResult:r}=await chrome.storage.local.get('lastResult');return r?.path&&!previous.includes(r.path)&&{state:r.state,path:r.path};},oldPaths),`new note after confirmation for ${opt.title}/${phase}`,18000);
+  assert.equal(result.state,opt.partial?'warn':'ok',`${p.name} ${phase}: result status`);assert.match(result.path,/^\d{4}-\d\d-\d\d\/[^/]+\.md$/);
   assert.equal(p.posts-posts,Number(opt.ai));assert.equal(p.httpsGets-images,Number(opt.media));assert.equal(p.httpAttempts,0);assert.equal(p.violations,0);
-  await until(async()=>!(await list()).some(t=>t.url.startsWith(`chrome-extension://${extensionId}/job.html`)||t.url===`chrome-extension://${extensionId}/popup.html`),'job and popup closed');
-  p.notes.push({...opt,path:result.path});s.active=null;s.confirmed=false;await article.close();
-  return {phase,path:result.path,state:result.state,summaryPreview:ui.summary,verifiedModelPosts:p.posts-posts,httpsGets:p.httpsGets-images,httpAttempts:p.httpAttempts};
+  await until(async()=>!(await targets(s)).some(t=>t.url.startsWith(`chrome-extension://${extensionId}/job.html`)||t.url===`chrome-extension://${extensionId}/popup.html`),'job and popup closed');
+  const note={...opt,path:result.path};p.notes.push(note);s.active=null;s.confirmed=false;await article.close();
+  const repeat=s.expectedVersion===oldVersion?null:await checkExisting(s,note,'repeat-'+phase);
+  return {phase,path:result.path,state:result.state,previewState:ui.state,previewDot:ui.dot||null,summaryPreview:ui.summary,verifiedModelPosts:p.posts-posts,httpsGets:p.httpsGets-images,httpAttempts:p.httpAttempts,repeat};
 }
 async function verifyVault(p) {
   const vault=join(ev,p.vault), snapshot=await tree(vault),files=Object.keys(snapshot).filter(k=>snapshot[k]!==null);
@@ -270,6 +305,19 @@ async function verifyVault(p) {
   for(const n of p.notes){
     const data=await readFile(join(vault,n.path),'utf8');expected.push(n.path);
     assert([n.title,n.marker,n.url].every(x=>data.includes(x)));assert.equal(data.includes(n.summary),n.ai);assert(!data.includes(other.name)&&noSecrets(data));
+    if(n.selection){assert(!data.includes(n.bodyMarker) && !data.includes(n.portions.find(t=>t!==n.marker)),'Selection was widened');assert(!data.includes('![HTTPS raster]('));}
+    // Account for each receipt by its matching note marker, not a directory-wide exception.
+    const marks=[...data.matchAll(/^<!-- pageleaf:clip:v1 ([a-f\d]{64}) ([a-z]+) -->$/gm)];
+    if(n.phase==='baseline')assert.equal(marks.length,0,'Read-only lookup rewrote an old note');
+    else{
+      assert.equal(marks.length,1,'Expected one capture identity marker');const [,key,codes]=marks[0];
+      const identity=n.selection?['pageleaf/receipt/1','selection',n.url,[n.marker]]:['pageleaf/receipt/1','whole',n.url];
+      assert.equal(key,digest(JSON.stringify(identity)),'Unexpected fixture identity');
+      assert.equal(codes,n.partial?'s':'ok','Unexpected marker status');const file=`.pageleaf/${key}.json`;
+      const content=await readFile(join(vault,file),'utf8');assert(noSecrets(content));
+      assert.deepEqual(JSON.parse(content),{format:'pageleaf/receipt/1',key,path:n.path});
+      expected.push(file);n.markerKey=key;
+    }
     if(n.media){
       const links=[...data.matchAll(/(!?)\[([^\]]*)\]\(([^)]+)\)/g)],plain=links.filter(m=>m[3]===n.http),local=links.filter(m=>m[1]==='!');
       assert.equal(plain.length,1,'HTTP URL and full query must survive as one link');assert.equal(plain[0][1],'');
@@ -279,7 +327,14 @@ async function verifyVault(p) {
   }
   for(const [file,hash] of Object.entries(p.snapshots))if(hash && file!==index)assert.equal(snapshot[file],hash,'Prior note or asset changed');
   assert.deepEqual(files.toSorted(),expected.toSorted());
-  if(p.notes.length){const data=await readFile(join(vault,index),'utf8');const paths=[...data.matchAll(/\]\(([^)]+\.md)\)/g)].map(m=>decodeURIComponent(m[1]));assert.deepEqual(paths.toSorted(),p.notes.map(n=>n.path).toSorted());assert(!data.includes(other.name)&&noSecrets(data));}
+  const dirs=new Set();for(const file of expected){for(let i=file.indexOf('/');i!==-1;i=file.indexOf('/',i+1))dirs.add(file.slice(0,i+1));}
+  assert.deepEqual(Object.keys(snapshot).filter(k=>snapshot[k]===null).toSorted(),[...dirs].toSorted(),'Unexpected directory');
+  if(p.notes.length){
+    const data=await readFile(join(vault,index),'utf8');const paths=[...data.matchAll(/\]\(([^)]+\.md)\)/g)].map(m=>decodeURIComponent(m[1]));
+    assert.deepEqual(paths.toSorted(),p.notes.map(n=>n.path).toSorted());assert(!data.includes(other.name)&&noSecrets(data));
+    for(const n of p.notes){const entry=data.split('\n').find(row=>{const m=row.match(/\]\(([^)]+\.md)\)/);return m && decodeURIComponent(m[1])===n.path;});assert(entry);
+      if(n.markerKey)assert(entry.includes(`<!-- pageleaf:key:${n.markerKey} -->`));else assert(!entry.includes('pageleaf:key:'));}
+  }
   p.snapshots=snapshot;
 }
 
@@ -350,33 +405,39 @@ try {
       assert.deepEqual(await tree(actual),initial);await rm(actual,{recursive:true});extracted=await extract(zip,version);
     }
     for(const p of profiles){
-      const v=stage==='baseline'?oldVersion:version,s=await launch(p,v),states=[],saves=[];
+      const v=stage==='baseline'?oldVersion:version,s=await launch(p,v),states=[],saves=[],rechecks=[];
       try{
         if(stage==='baseline'){
           await setup(s);p.revision=(await stored(s)).revision;assert(p.revision && p.revision!=='legacy');
           states.push(await checkState(s,'baseline'));saves.push(await saveCheck(s,'baseline'));
         }else if(stage==='migration'){
-          states.push(await checkState(s,'legacy'));await authorizeDir(s);saves.push(await saveCheck(s,'legacy'));
+          states.push(await checkState(s,'legacy'));await authorizeDir(s);
+          rechecks.push(await checkExisting(s,p.notes[0],'recognize-1.1.1-note-without-rewrite'));saves.push(await saveCheck(s,'legacy'));
           states.push(await vaultAction(s,'migrate'));
         }else{
           states.push(await checkState(s,'locked'));await authorizeDir(s);saves.push(await saveCheck(s,'locked'));
           states.push({after:'wrong pass',...await vaultAction(s,'wrong')});states.push(await vaultAction(s,'unlock'));saves.push(await saveCheck(s,'unlocked'));
+          saves.push(await saveCheck(s,'excerpt1'),await saveCheck(s,'excerpt2'));
           // Same-ID reload in the running process must also lock, not merely keep a cached usable Key.
           const manager=await s.ctx.newPage();await manager.goto('chrome://extensions/');await s.settings.close();
           await reloadInManager(manager,version);s.settings=await openSettings(s,manager);await manager.close();
           states.push({after:'extension reload',...await checkState(s,'locked')});await authorizeDir(s);
+          for(const phase of ['unlocked','excerpt1','excerpt2'])rechecks.push(await checkExisting(s,p.notes.find(n=>n.phase===phase),'same-page-after-reload-'+phase));
           states.push({after:'unlock after reload',...await vaultAction(s,'unlock')});saves.push(await saveCheck(s,'reloaded'));
         }
         assert.equal(p.logLeaks,0);assert.equal(p.violations,0);
         report.runs.push({profile:p.name,stage,version:v,extensionId,registration:s.install,folderConsent:s.folderConsent,aiConsent:s.aiConsent,restoreConsent:s.restoreConsent,
-          model:p.model,endpoint:p.endpoint,foreignVaultUnchanged:true,states,saves});console.log(`PASS ${p.name}: ${stage}`);
+          model:p.model,endpoint:p.endpoint,foreignVaultUnchanged:true,states,saves,rechecks});console.log(`PASS ${p.name}: ${stage}`);
       }finally{await s.ctx.close();}
     }
   }
+  const full=profiles.map(p=>p.notes.find(n=>n.phase==='unlocked'));
+  assert.equal(full[0].url,full[1].url);assert.equal(full[0].markerKey,full[1].markerKey,'Same full-page URL should get the same identity in different roots');
+  for(const p of profiles){const notes=p.notes.filter(n=>n.url===full[0].url);assert.equal(notes.length,3);assert.equal(new Set(notes.map(n=>n.markerKey)).size,3,'Article and two passages must be distinct');}
   assert.notEqual(profiles[0].fingerprint,profiles[1].fingerprint);assert.notEqual(profiles[0].revision,profiles[1].revision);
   assert.deepEqual(await tree(extDir),extracted);assert.equal(digest(await readFile(zip)),report.sha256);assert.equal(digest(await readFile(oldZip)),oldHash);
   report.network=Object.fromEntries(profiles.map(p=>[p.name,{verifiedModelRequests:p.posts,verifiedHttpsImages:p.httpsGets,httpRequests:p.httpAttempts,unexpectedRequests:p.violations,secretConsoleMessages:p.logLeaks}]));
-  report.directory='Distinct real Windows folders selected by the isolated browser’s native picker. Every confirmation used the actual toolbar popup, read back ordinary Markdown links, verified stored PNG bytes, index paths, previous file hashes, and a byte-unchanged foreign vault.';
+  report.directory='Distinct real Windows folders selected by the isolated browser’s native picker. Every confirmation used the actual toolbar popup, read back ordinary Markdown links, verified stored PNG bytes, index paths, previous file hashes, every identity marker and per-note receipt, and a byte-unchanged foreign vault. Both independent libraries captured the same article URL and two distinct passages; repeat previews resolved to their original paths without allowing a second save.';
   report.scope='Two persistent isolated Chrome roots, one temp unpacked path/ID, old ZIP → replacement candidate → browser restart → same-version extension reload. Playwright-served HTTPS articles, images and auth-checked model only; offline DNS. Checked extension-origin live IndexedDB, localStorage, chrome.storage.local/sync/session, rendered UI, observed requests, console and output files. Not a forensic disk-erasure check, signed store install/update, avatar-menu switch, real AI, user profile or MSI test.';
   report.archives=Object.fromEntries(profiles.map(p=>[p.vault,p.snapshots]));report.passed=true;report.finishedAt=new Date().toISOString();
   const text=JSON.stringify(report,null,2)+'\n';assert(noSecrets(text));

@@ -32,11 +32,14 @@ export async function getRootState() {
 }
 export async function setRoot(handle) {
   const db=await database();
-  return new Promise((resolve,reject)=>{
+  const revision=crypto.randomUUID();
+  await new Promise((resolve,reject)=>{
     const tx=db.transaction('preferences','readwrite'), s=tx.objectStore('preferences');
-    s.put(handle,'root'); s.put(crypto.randomUUID(),'rootRevision');
+    s.put(handle,'root'); s.put(revision,'rootRevision');
     tx.oncomplete=()=>resolve(); tx.onabort=tx.onerror=()=>reject(tx.error || new Error('保存目录设置失败。'));
   });
+  // Never carry the previous folder's green/orange dot over to a different library.
+  await chrome.storage.session.set({pageleafRootEpoch:revision}).catch(()=>{});
 }
 // All public credential operations, including reads, share one origin-wide lock.
 // IndexedDB transactions alone cannot span WebCrypto and chrome.storage.session.

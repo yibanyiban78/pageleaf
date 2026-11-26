@@ -1,0 +1,12 @@
+{
+  "source": "Two notes taken verbatim from the isolated v1.2.0 Chrome archive. Root index keeps their two original entries; PNGs are supplied by these same synthetic fixtures.",
+  "paths": [
+    "2026-11-26/潮间带观测手记.md",
+    "2026-11-26/水文工作室 - 山溪观测.md"
+  ],
+  "files": {
+    "2026-11-26/潮间带观测手记.md": "# 潮间带观测手记\n\n- 类型：文章\n- 剪藏日期：2026-11-26\n- 作者：林青\n- 来源：[https://journal.pageleaf.test/field/tide](https://journal.pageleaf.test/field/tide)\n\n## 内容摘要\n\n模拟摘要：观测资料记录了样点变化。\n\n## 正文\n\n林青\n\n标记正文：退潮后，我们沿着潮线记录盐沼植物。沿岸十个样点保持相同的观测时长，以便日后对照。\n\n## 样点与潮线\n\n选区标记：**观察芦苇**，并沿着[样点手册](https://journal.pageleaf.test/reference/field-guide)记录潮位。![样点草图](assets/m-ed3a55d1079b3a04/01.png)\n\n未选标记：晴天与阴天的记录须分开比较；未完成的样点不参与计算。选择路线时，不经过脆弱植被。\n\n![样点全景](assets/m-ed3a55d1079b3a04/02.png)\n\n图一：盐沼样点的潮线。\n\n- 在同一时间窗测量。\n- 照片保持相同方向。\n\n> 每次观测都保留原始记录。\n",
+    "2026-11-26/水文工作室 - 山溪观测.md": "# 山溪观测\n\n- 类型：YouTube 视频\n- 剪藏日期：2026-11-26\n- 频道：[水文工作室](https://www.youtube.com/channel/UCaaaaaaaaaaaaaaaaaaaaaa)\n- 来源：[https://www.youtube.com/watch?v\\=Stream00001](https://www.youtube.com/watch?v=Stream00001)\n\n![视频封面](assets/m-9950ab6a21a80744/cover.png)\n\n## 内容摘要\n\n模拟摘要：观测资料记录了样点变化。\n\n## 视频简介\n\n视频简介标记：雨后山溪，流速与岸线变化。\n\n## 字幕全文\n\nzh\\-Hans · 人工字幕\n\n- [00:00](https://www.youtube.com/watch?v=Stream00001&t=0s) 字幕起点：溪水开始上涨。\n- [01:14](https://www.youtube.com/watch?v=Stream00001&t=74s) 字幕尾点：样点水位已回落。\n",
+    "剪藏索引.md": "# 剪藏索引\n\n<!-- pageleaf:index:v1 -->\n\n## 2026-11-26\n\n\n\n\n\n- [山溪观测](2026-11-26/%E6%B0%B4%E6%96%87%E5%B7%A5%E4%BD%9C%E5%AE%A4%20-%20%E5%B1%B1%E6%BA%AA%E8%A7%82%E6%B5%8B.md) · 水文工作室 · YouTube 视频\n\n\n\n- [潮间带观测手记](2026-11-26/%E6%BD%AE%E9%97%B4%E5%B8%A6%E8%A7%82%E6%B5%8B%E6%89%8B%E8%AE%B0.md) · 林青 · 文章\n\n<!-- /pageleaf:index:v1 -->\n"
+  }
+}
