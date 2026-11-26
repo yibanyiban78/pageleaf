@@ -1,6 +1,6 @@
 # 页笺 Pageleaf 隐私政策
 
-适用版本：**1.2.0 候选版，尚未在 Chrome 网上应用店上架**。更新日期：2026 年 11 月 26 日。维护者：[yibanyiban78](https://github.com/yibanyiban78/pageleaf)。仍在使用 1.1.1？请看[该版本的原政策](https://github.com/yibanyiban78/pageleaf/blob/5d43dc3a4d1f016a32230f59ce8f090dca24ac1c/PRIVACY.md)：旧版未加密模型 Key，也可能请求 HTTP 图片。下述保护不会自动改变已安装的旧版。
+适用版本：**1.2.0，通过 [GitHub Releases](https://github.com/yibanyiban78/pageleaf/releases/latest) 分发，未上架任何扩展商店**。更新日期：2026 年 11 月 26 日。维护者：[yibanyiban78](https://github.com/yibanyiban78/pageleaf)。仍在使用 1.1.1？请看[该版本的原政策](https://github.com/yibanyiban78/pageleaf/blob/5d43dc3a4d1f016a32230f59ce8f090dca24ac1c/PRIVACY.md)：旧版未加密模型 Key，也可能请求 HTTP 图片。下述保护不会自动改变已安装的旧版。
 
 页笺把你主动剪藏的网页、选段或视频字幕保存为本地 Markdown 笔记。无需页笺账号；发布者不运营剪藏服务器，不接收你的笔记、API Key、解锁口令或剪藏记录。**本地保存不等于完全离线**：确认剪藏后，获取图片、补取字幕或使用可选的 AI 摘要时可能联网。
 
@@ -35,7 +35,7 @@
 
 ## 统计、有限使用与联系
 
-页笺没有广告、第三方分析 SDK、自建遥测或跨设备用户标识。发布者看不到你剪藏了哪篇内容、剪了几次。将来通过 Chrome 网上应用店分发时，Google 可向发布者提供安装、卸载等汇总报表；这不是页笺上报的活动记录。参见 [Google 隐私政策](https://policies.google.com/privacy)及[商店指标说明](https://developer.chrome.com/docs/webstore/metrics)。
+页笺没有广告、第三方分析 SDK、自建遥测或跨设备用户标识。发布者看不到你剪藏了哪篇内容、剪了几次。访问仓库或下载安装包时，你使用的是 GitHub 的服务，其数据处理见 [GitHub 隐私声明](https://docs.github.com/zh/site-policy/privacy-policies/github-general-privacy-statement)。GitHub 提供附件的汇总下载次数；这不是页笺上报的事件，也不代表实际安装或剪藏的人数。
 
 页笺仅为上述剪藏功能使用或传输用户数据，遵守 Chrome 网上应用店用户数据政策的[有限使用要求](https://developer.chrome.com/docs/webstore/program-policies/limited-use)。不出售用户数据，不将其用于广告、信用评估或放贷，不向数据经纪商转让数据。
 
