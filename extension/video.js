@@ -56,7 +56,9 @@
   }
   function thumbnailURL(value) {
     const u = asURL(value);
-    return secure(u) && (/(?:^|\.)ytimg\.com$/.test(u.hostname) || u.hostname === 'img.youtube.com') ? u.href : '';
+    // An offered HTTP thumbnail is reference-only; don't replace it with a guessed HTTPS download.
+    return u && ['https:','http:'].includes(u.protocol) && !u.username && !u.password && !u.port &&
+      (/(?:^|\.)ytimg\.com$/.test(u.hostname) || u.hostname === 'img.youtube.com') ? u.href : '';
   }
   const thumbnails = [...(Array.isArray(details.thumbnail?.thumbnails) ? details.thumbnail.thumbnails : []),
     ...(Array.isArray(micro.thumbnail?.thumbnails) ? micro.thumbnail.thumbnails : [])];

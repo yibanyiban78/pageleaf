@@ -33,17 +33,18 @@ function render(data) {
   el('cover-row').hidden = !video;
   el('captions-row').hidden = !video;
   if (video) {
-    el('cover').textContent = clip.cover ? '可尝试保存' : '未找到封面';
+    el('cover').textContent = /^http:/i.test(clip.cover || '') ? 'HTTP 封面仅保留原图链接。' : clip.cover ? '可尝试保存' : '未找到封面';
     el('captions').textContent = cues ? `已读到 ${cues} 条，可保存带时间戳的字幕。`
       : captionStatus === 'pending' ? '待检查，取得后才保存。' : '未读到可用字幕。';
   } else {
     const count = Array.isArray(clip.images) ? clip.images.length : 0;
-    el('images').textContent = count ? `${count} 张，可尝试保存到本地。` : '0 张';
+    const refs = (clip.images || []).filter(image => /^http:/i.test(image.url)).length;
+    el('images').textContent = refs ? `共 ${count} 张，其中 ${refs} 张 HTTP 图片只留链接。` : count ? `${count} 张，可尝试保存到本地。` : '0 张';
   }
 
   let summary;
   if (selection) summary = '选段不调用 AI。';
-  else if (!aiReady) summary = 'AI 服务未就绪，不生成摘要。';
+  else if (!aiReady) summary = data.aiHold || 'AI 服务未就绪，不生成摘要。';
   else if (!video) summary = '确认后将正文发给已配置的 AI 服务，尝试生成摘要。';
   else if (cues) summary = '确认后将字幕发给已配置的 AI 服务，尝试生成摘要。';
   else if (captionStatus === 'pending') summary = '取得字幕后才会发送给 AI，尝试生成摘要。';

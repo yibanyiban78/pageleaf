@@ -139,6 +139,7 @@ try {
   report.extensionVersion=manifest.version;
   assert.equal(manifest.version,expectedVersion);assert.equal(manifest.action.default_popup,'popup.html');
   assert.deepEqual(manifest.permissions.toSorted(),['activeTab','scripting','storage']);assert.deepEqual(manifest.host_permissions||[],[]);
+  assert.deepEqual(manifest.optional_host_permissions.toSorted(),['https://*/*','http://localhost/*','http://127.0.0.1/*','http://[::1]/*'].toSorted());
   const optionsURL=ext+'/settings.html', jobURL=ext+'/job.html';
   const tabTargets={settings:new Set(),jobs:new Set()}, activeSettings=new Set();let settingsActivations=0;
   // Track transient page navigations and activations of an existing options tab,
@@ -263,11 +264,17 @@ try {
   },new URL(api).origin+'/*');
   await settings.locator('#endpoint').fill(api);
   await settings.locator('#model').fill(model);
-  await settings.locator('#key').fill(token);
+  const fillVault = async () => {
+    await settings.locator('#key').fill(token);
+    await settings.locator('#vault-pass').fill('field notes temporary fixture');
+    await settings.locator('#vault-confirm').fill('field notes temporary fixture');
+  };
+  await fillVault();
   await settings.locator('#save').click();
   await settings.waitForFunction(()=>document.querySelector('#aimsg').textContent.includes('未获'));
   assert.equal(await settings.evaluate(async()=>(await (await import('./store.js')).getConfig()).endpoint),'');
   await settings.evaluate(()=>{window.fixtureConsent=true;});
+  await fillVault();
   await settings.locator('#save').click();
   await until(()=>settings.evaluate(async arg=>{const v=await (await import('./store.js')).getConfig();return v.key===arg.key && v.model===arg.model && v.endpoint===arg.endpoint;},{endpoint:api,model,key:token}),'settings form to persist');
   assert.deepEqual(await settings.evaluate(()=>window.fixtureRequests),[{origins:[new URL(api).origin+'/*']},{origins:[new URL(api).origin+'/*']}]);

@@ -4,11 +4,11 @@
   const hosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com',
     'youtube-nocookie.com', 'www.youtube-nocookie.com', 'youtu.be']);
   const text = (value, limit = 4096) => typeof value === 'string' && value.length <= limit ? value.trim() : '';
-  function url(value) {
+  function url(value, httpLinkOnly = false) {
     if (!text(value, 16384)) return null;
     try {
       const u = new URL(value, location.href);
-      return u.protocol === 'https:' && !u.username && !u.password && !u.port ? u : null;
+      return (u.protocol === 'https:' || (httpLinkOnly && u.protocol === 'http:')) && !u.username && !u.password && !u.port ? u : null;
     } catch { return null; }
   }
   function videoID(value) {
@@ -67,7 +67,7 @@
       ? `https://www.youtube.com${u.pathname}` : '';
   }
   function thumbnail(value) {
-    const u = url(value);
+    const u = url(value, true); // HTTP thumbnails are saved as text links, never downloaded.
     if (!u || !(/(?:^|\.)ytimg\.com$/.test(u.hostname) || u.hostname === 'img.youtube.com')) return '';
     const embeddedID = /^\/(?:vi|vi_webp|vi_live|an_webp)\/([^/]+)\//.exec(u.pathname)?.[1];
     return embeddedID && embeddedID !== id ? '' : u.href;

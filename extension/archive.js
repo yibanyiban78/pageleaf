@@ -246,6 +246,13 @@ async function imagesFor(clip, dateDir, stem, getImage, report, warnings) {
     const dataImage = typeof item.url === 'string' && item.url.length <= 17 * 1024 * 1024 &&
       /^data:image\/(?:png|jpeg|webp|gif|avif);base64,[a-z\d+/]+={0,2}$/i.test(item.url);
     seq++;
+    // Plain links never trigger a reader-side image load. Do not even invoke a
+    // downloader for HTTP (including same-origin and loopback); this is intentional.
+    if (url?.protocol === 'http:') {
+      const reference = `${link(alt, url)}（HTTP 原图链接，未下载）`;
+      if (clip.kind === 'youtube') cover = reference; else images.set(item.token, reference);
+      continue;
+    }
     report(`正在保存第 ${seq} 张图片…`);
     let markdown;
     try {

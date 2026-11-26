@@ -148,6 +148,17 @@ test('image fallbacks are safe links only; rejects unsafe URLs, downloads and ex
   assert.match(note, /图1（未保存到本地）/); assert.equal(root.at(`${DAY}/assets`), undefined);
 });
 
+test('HTTP media in an article, selection or cover is a plain link, even on the same HTTP origin', async () => {
+  const url = 'http://x.example/figure.png?asset=sample&n=2';
+  for (const kind of ['article', 'selection', 'youtube']) {
+    const root=new Dir(), called=[];
+    const r=await save(root,{kind,url:'http://x.example/page',body:tkn(0),images:[{token:tkn(0),url,alt:'图'}],cover:url},{getImage:async u=>{called.push(u);return picture();}});
+    const note=await root.text(r.path);
+    assert.deepEqual(called,[]);assert(r.indexed);assert.deepEqual(r.warnings,[]);
+    assert(note.includes(`](${url})（HTTP 原图链接，未下载）`));assert(!note.includes('!['));assert(!root.at(`${DAY}/assets`));
+  }
+});
+
 test('inline raster data becomes a local image; size-limited and never echoed on failure', async () => {
   const root = new Dir(), called = [];
   const data = `data:image/png;base64,${Buffer.from(PNG).toString('base64')}`;

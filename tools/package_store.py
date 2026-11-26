@@ -11,7 +11,7 @@ EXTENSION = ROOT / 'extension'
 # rather than something to ship because its extension happens to be .json or .js.
 FILES = frozenset('''manifest.json archive.js background.js extract.js job.html job.js
 network.js popup.css popup.html popup.js preview.js settings.html settings.js
-store.js style.css video-preview.js video.js icons/16.png icons/32.png
+store.js vault.js style.css video-preview.js video.js icons/16.png icons/32.png
 icons/48.png icons/128.png'''.split())
 
 
@@ -22,7 +22,10 @@ def build():
     names = {p.relative_to(EXTENSION).as_posix() for p in paths if p.is_file()}
     if names != FILES:
         raise ValueError(f'Unexpected or missing runtime files: {sorted(names ^ FILES)}')
-    entries = {name: (EXTENSION / name).read_bytes() for name in sorted(FILES)}
+    # The public project is distributed under MIT: include the notice
+    # in copies of the runtime as well as in source checkouts.
+    entries = {name: path.read_bytes() for name, path in sorted(
+        [(name, EXTENSION / name) for name in FILES] + [('LICENSE', ROOT / 'LICENSE')])}
     manifest = json.loads(entries['manifest.json'])
     version = manifest['version']
     if manifest['manifest_version'] != 3 or version != json.loads((ROOT / 'package.json').read_bytes())['version']:
@@ -51,7 +54,7 @@ def build():
     except FileExistsError:
         if dest.read_bytes() != payload:
             raise ValueError('Different ZIP already exists; do not overwrite a versioned release')
-    print(f'{dest.name} | {len(entries)} runtime files | {len(payload)} bytes | SHA-256 {sha256(payload).hexdigest()}')
+    print(f'{dest.name} | {len(entries)} files (runtime + license) | {len(payload)} bytes | SHA-256 {sha256(payload).hexdigest()}')
 
 
 if __name__ == '__main__':

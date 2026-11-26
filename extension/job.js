@@ -1,8 +1,8 @@
-import {getRootState,getConfig} from './store.js';
+import {getRootState,getConfig,getServiceInfo} from './store.js';
 import {summarize,downloadImage} from './network.js';
 import {saveClip} from './archive.js';
 import {report} from './background.js';
-import {canWrite,samePage,serviceIdentity} from './preview.js';
+import {aiUnavailable,canWrite,samePage,serviceIdentity} from './preview.js';
 
 const status=document.querySelector('#step');
 const progress=text=>{status.textContent=text;};
@@ -33,9 +33,18 @@ async function run(){
     stage='摘要';
     if(clip.kind!=='selection' && (clip.kind!=='youtube' || clip.cues?.length)){
       try {
+        if(!task.aiReady) throw new Error(task.aiHold || '预览时 AI 服务未就绪，未发送内容。');
         const config=await getConfig();
-        if(task.aiReady && serviceIdentity(config)!==task.service) throw new Error('摘要服务设置已改变，未发送正文。');
-        clip.summary=await summarize(clip,task.aiReady?config:null,{onProgress:progress});
+        const hold=aiUnavailable(config);
+        if(hold) throw new Error(hold);
+        if(serviceIdentity(config)!==task.service) throw new Error('摘要服务设置已改变，未发送内容。');
+        // Long articles can trigger multiple model calls. Do not start a later
+        // request if the user locked, removed, or changed the service mid-job.
+        // An HTTPS request already sent cannot be recalled by locking the vault.
+        clip.summary=await summarize(clip,config,{onProgress:progress,beforeRequest:async()=>{
+          const current=await getServiceInfo();
+          if(aiUnavailable(current) || serviceIdentity(current)!==task.service) throw new Error('Key 已锁定或服务设置已改变，已停止后续摘要请求。');
+        }});
       } catch(e){clip.summaryError=e.message;notes.push(`摘要生成失败：${e.message}`);}
     } else if(clip.kind==='youtube') notes.push('未取得字幕，未生成内容摘要。');
     stage='文件'; progress('正在写入 Markdown 与本地图片');

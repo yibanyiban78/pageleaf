@@ -8,9 +8,26 @@
 <section aria-labelledby="dest"><h2 id="dest">本地归档</h2><p>请选择专用文件夹。网页和视频会按当天日期保存，索引始终在根目录。</p><div class="directory"><span class="caption">保存到</span><strong id="dirname">正在读取…</strong></div>
 <div class="actions"><button type="button" id="choose">选择文件夹</button><button type="button" class="secondary" id="authorize" hidden>重新授权</button></div><p class="notice" id="dirmsg" role="status"></p></section>
 <section aria-labelledby="ai"><h2 id="ai">中文摘要</h2><p>仅把整篇文章的正文或视频字幕发送到你指定的服务。选段不会调用 AI，图片不会发送。</p>
-<form id="service" aria-labelledby="ai" method="post"><label for="endpoint">API 地址</label><input id="endpoint" name="endpoint" type="url" placeholder="https://api.example.com/v1" required autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="apihelp"><small id="apihelp">使用 OpenAI 兼容地址，也可以填完整的 /chat/completions 路径。</small>
-<div class="pair"><div><label for="model">模型名称</label><input id="model" name="model" required maxlength="160" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="服务商提供的模型 ID"></div><div><label for="key">API Key</label><input id="key" name="key" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="按服务商要求填写" maxlength="4096" aria-describedby="keyhelp"></div></div>
-<small id="keyhelp">Key 只保存在当前浏览器的扩展存储中，不写入笔记，不通过 Chrome 同步。</small><div class="actions"><button type="submit" id="save">保存 AI 设置</button><button type="button" class="textbtn" id="forget" hidden>移除服务设置</button></div><p class="notice" role="status" id="aimsg"></p></form></section>
-<section aria-labelledby="imgperm"><h2 id="imgperm">离线配图</h2><p>默认尝试保存可直接读取的图片。不允许跨域读取的图床，可通过额外授权访问；Chrome 会提示允许访问所有网站。扩展只在你确认保存后取图，不会自动读取浏览历史。</p><button type="button" class="secondary" id="images">允许跨站保存图片</button><p class="notice" id="imgmsg" role="status"></p></section>
+<form id="service" aria-labelledby="ai" method="post" novalidate>
+  <label for="endpoint">API 地址</label><small id="apihelp">填写 OpenAI 兼容地址，也可填完整的 /chat/completions 路径。不要在网址中加入 Key。仅本机回环地址可用 HTTP。</small>
+  <input id="endpoint" name="endpoint" type="url" placeholder="https://api.example.com/v1" required autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="apihelp"><small id="endpoint-error" class="field-error" hidden></small>
+  <div class="pair"><div><label for="model">模型名称</label><input id="model" name="model" required maxlength="160" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="服务商提供的模型 ID"><small id="model-error" class="field-error" hidden></small></div>
+  <div><label for="key">API Key（选填）</label><input id="key" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="按服务商要求填写" maxlength="4096" aria-describedby="keyhelp"><small id="key-error" class="field-error" hidden></small></div></div>
+  <small id="keyhelp">不需要 Key 的本地服务可留空。填写 Key 后，需设置本地口令加密保存。</small>
+</form>
+<form id="vault-auth" aria-labelledby="vault-state" method="post" novalidate>
+  <fieldset id="vault" hidden><legend id="vault-state">本地 Key</legend>
+    <p id="vault-note"></p>
+    <div id="vault-fields" hidden><label for="vault-pass" id="pass-label">设置本地口令</label>
+      <small id="pass-help">至少 12 个字符。请妥善保管，页笺没有云端找回功能。</small>
+      <input id="vault-pass" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" aria-describedby="pass-help"><small id="vault-pass-error" class="field-error" hidden></small>
+      <div id="confirm-row"><label for="vault-confirm">再次输入本地口令</label><input id="vault-confirm" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none"><small id="vault-confirm-error" class="field-error" hidden></small></div>
+    </div>
+    <div class="actions" id="vault-controls" hidden><button type="submit" id="vault-action" hidden>解锁 Key</button><button type="button" id="vault-lock" class="secondary" hidden>锁定 Key</button></div>
+  </fieldset>
+</form>
+<div class="actions"><button type="submit" form="service" id="save" disabled>保存 AI 设置</button><button type="button" class="textbtn" id="forget" hidden>移除服务设置</button></div>
+<p class="notice" role="status" id="aimsg"></p></section>
+<section aria-labelledby="imgperm"><h2 id="imgperm">离线配图</h2><p>确认保存后，页笺会尝试下载 HTTPS 配图，也支持内嵌位图。普通 HTTP 图片不会下载，只保留可安全写入的普通链接。需要跨站读取图床时，可额外授权访问所有 HTTPS 网站。页笺不会自动读取浏览历史。</p><button type="button" class="secondary" id="images">允许跨站保存 HTTPS 图片</button><p class="notice" id="imgmsg" role="status"></p></section>
 <section class="receipt" aria-labelledby="last"><h2 id="last">最近一次剪藏</h2><p id="result" role="status">还没有剪藏记录。</p></section>
 </div></main><script type="module" src="settings.js"></script></body></html>

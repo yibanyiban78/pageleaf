@@ -87,6 +87,12 @@ test('current player wins over stale SPA bootstrap; choose identifiable manual t
   assert.deepEqual(f.requests.map(r => r.url), [baseUrl]);
 });
 
+test('HTTP cover metadata is reference-only; subtitle HTTPS restrictions are unchanged', async t => {
+  const live=playerResponse();live.playabilityStatus.status='UNPLAYABLE';const href=`http://i.ytimg.com/vi/${id}/cover.jpg?asset=fixture`;
+  live.videoDetails.thumbnail.thumbnails=[{width:320,url:href}];
+  const f=await fixture(t,{live});assert.equal((await f.clip()).cover,href);assert.deepEqual(f.requests,[]);
+});
+
 test('honor a selected offered ASR track; mobile cross-origin request omits credentials and redirects', async t => {
   const f = await fixture(t, {url:`https://m.youtube.com/watch?v=${id}`, live:playerResponse([manual, automatic]), selected:automatic, observeFetch:true});
   const clip = await f.clip();

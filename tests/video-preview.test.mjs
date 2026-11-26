@@ -100,6 +100,12 @@ test('preview returns current video metadata and canonical URL, not bootstrap or
     cues:[],language:'',captionKind:'',captionStatus:'pending'});
 });
 
+test('an offered HTTP cover is preserved verbatim for link-only archiving, without any preview fetch', async t => {
+  const live=reply(), href=`http://i.ytimg.com/vi/${id}/cover.jpg?asset=fixture`;
+  live.videoDetails.thumbnail.thumbnails=[{width:1280,url:href}];
+  const f=await fixture(t,{live});assert.equal((await f.preview()).cover,href);
+});
+
 test('no player offers, plain, filtered, paginated or virtualized panel rows never imply no captions or a complete transcript', async t => {
   const live = reply(); delete live.captions;
   const f = await fixture(t, {live});

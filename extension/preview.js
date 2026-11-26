@@ -1,4 +1,4 @@
-import {getRootState, getConfig} from './store.js';
+import {getRootState, getServiceInfo} from './store.js';
 import {estimatedRelativePath} from './archive.js';
 
 export function samePage(left, right) {
@@ -11,7 +11,14 @@ export function videoId(input) {
   const id=u.hostname==='youtu.be'?u.pathname.replace(/^\/|\/$/g,''):/^\/watch\/?$/.test(u.pathname)?u.searchParams.get('v'):/^\/(?:shorts|live|embed|v)\/([\w-]+)\/?$/.exec(u.pathname)?.[1];
   return /^[\w-]{11}$/.test(id||'') ? id : '';
 }
-export const serviceIdentity=config=>JSON.stringify([config?.endpoint||'',config?.model||'']);
+export const serviceIdentity=config=>JSON.stringify([config?.endpoint||'',config?.model||'',config?.revision||'']);
+export function aiUnavailable(config) {
+  if (config?.malformed || config?.credentialState==='invalid') return 'AI 配置无法读取；未发送正文或字幕，请在设置中检查。';
+  if (config?.credentialState==='legacy') return '旧 Key 等待保护；请在设置中为原 Key 设置本地口令。';
+  if (config?.credentialState==='locked') return 'Key 已锁定；请在设置中输入本地口令解锁。';
+  if (!config?.endpoint || !config?.model || !['none','unlocked'].includes(config.credentialState)) return 'AI 服务未就绪，不生成摘要。';
+  return '';
+}
 export const canWrite=async root=>!!root && await root.queryPermission({mode:'readwrite'}).then(p=>p==='granted',()=>false);
 const issued=new WeakSet();
 
@@ -33,11 +40,13 @@ export async function preparePreview() {
     clip=video?.result;
     if(!id || !clip || clip.kind!=='youtube' || clip.videoId!==id) throw new Error('视频已切换或尚未就绪，请重新预览。');
   } else if(!['article','selection'].includes(clip.kind) || !clip.body?.trim()) throw new Error('未找到正文。请选中要保留的内容后重试。');
-  const [{root,revision},config,current]=await Promise.all([getRootState(),getConfig(),chrome.tabs.get(tab.id)]);
+  // Preview can describe the vault, but never needs the actual credential.
+  const [{root,revision},config,current]=await Promise.all([getRootState(),getServiceInfo().catch(()=>({malformed:true})),chrome.tabs.get(tab.id)]);
+  const aiHold=aiUnavailable(config);
   if(!samePage(current.url,tab.url)) throw new Error('原网页已切换，请重新打开预览。');
   const folderName=root?.name || '', folderReady=await canWrite(root);
   const draft={tabId:tab.id,windowId:tab.windowId,documentId:page.documentId,sourceUrl:tab.url,at,clip,root,folderName,folderReady,rootRevision:revision,
-    aiReady:!!(config.endpoint && config.model),service:serviceIdentity(config),excerpt:clip.excerpt||clip.description||'',
+    aiReady:!aiHold,aiHold,service:serviceIdentity(config),excerpt:clip.excerpt||clip.description||'',
     estimatedPath:`${folderName?folderName+'/':''}${estimatedRelativePath(clip,new Date(at))}`,
     captionStatus:clip.kind==='youtube'?(clip.cues?.length?'read':clip.captionStatus==='unavailable'?'unavailable':'pending'):''};
   issued.add(draft); return draft;
@@ -48,9 +57,9 @@ export async function confirmPreview(draft) {
   if(!issued.has(draft) || !draft.folderReady) throw new Error('无法保存这个预览。请重新打开预览并检查目录权限。');
   if(Date.now()-draft.at>15*60_000) throw new Error('预览已过期，请关闭弹窗后重新预览。');
   issued.delete(draft); // At most one submission, even if two clicks arrive before the first await.
-  const {tabId,windowId,documentId,sourceUrl,at,clip,rootRevision,service,aiReady,captionStatus}=draft;
+  const {tabId,windowId,documentId,sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus}=draft;
   let response;
-  try { response=await chrome.runtime.sendMessage({type:'pageleaf.confirm',task:{source:tabId,windowId,documentId,url:sourceUrl,at,clip,rootRevision,service,aiReady,captionStatus}}); }
+  try { response=await chrome.runtime.sendMessage({type:'pageleaf.confirm',task:{source:tabId,windowId,documentId,url:sourceUrl,at,clip,rootRevision,service,aiReady,aiHold,captionStatus}}); }
   catch { throw new Error('任务未能交接，请查看图标状态后重新预览。'); }
   if(!response?.ok) throw new Error(response?.message || '未能开始保存，请关闭后重新预览。');
 }
